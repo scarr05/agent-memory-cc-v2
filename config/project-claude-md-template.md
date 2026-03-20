@@ -1,0 +1,48 @@
+# <Project Name>
+
+## Overview
+
+<1-2 sentence description of what this project is.>
+
+## Tech Stack
+
+- **Language:** <e.g. Python 3.12>
+- **Framework:** <e.g. FastAPI>
+- **Infra:** <e.g. Terraform, AWS>
+- **Key deps:** <list notable dependencies>
+
+## Build & Test
+
+```bash
+# Install
+<install command>
+
+# Run
+<run command>
+
+# Test
+<test command>
+
+# Lint
+<lint command>
+```
+
+## Architecture
+
+<Brief description of project structure. Key directories, entry points, patterns.>
+
+## Memory
+
+This project uses the global memory system. Key notes:
+
+- **Obsidian project slug:** `<project-slug>` (used in `5 Agent Memory/sessions/by-project/<project-slug>/`)
+- **Obsidian area:** `<area>` (e.g. AWS, Azure, Personal)
+- **Related vault notes:** `<path to project notes in 1 Projects/>`
+
+When starting work, run `/memory-load` or search `5 Agent Memory/sessions/by-project/<project-slug>/` for prior context.
+
+When finishing significant work, run `/memory-sync` to persist context.
+
+## Project-Specific Rules
+
+<Any rules specific to this project that override or extend global CLAUDE.md.>
