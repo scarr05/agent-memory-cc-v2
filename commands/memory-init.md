@@ -118,6 +118,14 @@ Most recent: 2026-03-15 — "API redesign planning"
 **Confirm these values, or tell me what to change.**
 ```
 
+If git history is detected (more than 0 commits), add a row to the table:
+
+```
+| Analyse codebase | Yes/No | git history detected (N commits) |
+```
+
+This row controls whether Phase 4.6 (Codebase Analysis) runs. Default suggestion is "Yes" for repos with 10+ commits, "No" for fewer.
+
 Wait for the user's confirmation or corrections before proceeding.
 
 ## Phase 3: Create Project CLAUDE.md
@@ -232,6 +240,62 @@ If project doesn't exist → add a new row.
 
 If `project-index.md` doesn't exist → create it using the template from the architecture docs.
 
+## Phase 4.5: Decisions Log Setup
+
+### 4.5.1 Check for Existing Decisions Log
+
+```
+list_directory("5 Agent Memory/sessions/by-project/<slug>/")
+```
+
+If `_decisions.md` already exists, skip this phase (idempotent).
+
+### 4.5.2 Check for Existing Sessions with Decisions
+
+If `_decisions.md` doesn't exist, scan existing session notes for `decisions:` frontmatter:
+
+```
+get_notes_info("5 Agent Memory/sessions/by-project/<slug>/")
+```
+
+For each session note that has a `decisions:` frontmatter array, collect the decisions.
+
+### 4.5.3 Create and Backfill
+
+If sessions with decisions were found:
+
+1. Build the proposed `_decisions.md` content:
+   - Frontmatter with `type: decisions`
+   - One entry per decision, formatted as:
+
+```markdown
+### <session-date> — <Decision Title>
+**Context:** <from session context section if available, otherwise "See source session">
+**Decision:** <the decision text from frontmatter>
+**Rationale:** <from session decisions section if available, otherwise "See source session">
+**Source:** [[<session-note-filename>]]
+```
+
+2. Present the proposed content for confirmation:
+
+```
+## Decisions Log Backfill
+
+Found <N> decisions across <M> sessions. Proposed _decisions.md:
+
+<preview of content>
+
+**Write this to Obsidian?**
+```
+
+3. After confirmation, write via MCP:
+
+```
+write_note("5 Agent Memory/sessions/by-project/<slug>/_decisions.md", <content>)
+```
+
+If no existing sessions have decisions, create an empty `_decisions.md` with frontmatter only — ready for the first `/memory-sync` or `/decision` to populate.
+
 ## Phase 5: Load and Present Context
 
 If prior sessions or learnings were found in Phase 1.8:
@@ -255,6 +319,12 @@ Present:
 - <learning 2>
 
 Ready to work on <project>. What are we doing today?
+```
+
+If `_decisions.md` exists and has entries, include in the context output:
+
+```
+**Decisions log:** <N> decisions recorded. Most recent: "<most recent decision title>" (<date>)
 ```
 
 If no prior context exists:
