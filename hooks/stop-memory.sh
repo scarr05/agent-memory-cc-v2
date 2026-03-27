@@ -69,6 +69,18 @@ if [[ "$DURATION_MINS" -ge 45 ]] && ! grep -q 'duration_nudge_sent=true' "$META_
     echo "duration_nudge_sent=true" >> "$META_FILE"
 fi
 
+# --- Dream timer check ---
+LAST_DREAM_FILE="$PROJECT_DIR/.last-dream"
+LAST_DREAM=$(cat "$LAST_DREAM_FILE" 2>/dev/null || echo "0")
+NOW_EPOCH_DREAM=$(date +%s)
+HOURS_SINCE_DREAM=$(( (NOW_EPOCH_DREAM - LAST_DREAM) / 3600 ))
+
+if [[ "$HOURS_SINCE_DREAM" -ge 24 ]] && [[ "$LAST_DREAM" != "0" || "$NEW_COUNT" -ge 5 ]]; then
+    # Only create dream-pending if we've had at least one dream before,
+    # or if this session has 5+ messages (avoid nudging on first-ever use)
+    touch "$HOME/.claude/.dream-pending"
+fi
+
 # Output nudge if significant
 if [[ -n "$NUDGE" ]]; then
     cat << HOOKJSON
