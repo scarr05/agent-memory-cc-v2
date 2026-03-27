@@ -64,23 +64,7 @@ If the decision is already logged (same topic), tell the user and ask if they wa
 
 ## Step 4: Write Entry
 
-If `_decisions.md` doesn't exist, create it using this frontmatter:
-
-```yaml
----
-title: "Decisions — <Display Name>"
-type: decisions
-project: "<slug>"
-created: <today's date>
-modified: <today's date>
----
-
-# Decisions — <Display Name>
-
-Append-only log of significant decisions for this project.
-
-<!-- Entries are appended below this line. Do not reorder or rewrite existing entries. -->
-```
+If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders with the actual values.
 
 Append the new entry using `patch_note`:
 

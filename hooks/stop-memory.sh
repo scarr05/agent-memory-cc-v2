@@ -70,15 +70,17 @@ if [[ "$DURATION_MINS" -ge 45 ]] && ! grep -q 'duration_nudge_sent=true' "$META_
 fi
 
 # --- Dream timer check ---
+# Uses NOW_EPOCH from duration check above to avoid redundant date subprocess
 LAST_DREAM_FILE="$PROJECT_DIR/.last-dream"
-LAST_DREAM=$(cat "$LAST_DREAM_FILE" 2>/dev/null || echo "0")
-NOW_EPOCH_DREAM=$(date +%s)
-HOURS_SINCE_DREAM=$(( (NOW_EPOCH_DREAM - LAST_DREAM) / 3600 ))
-
-if [[ "$HOURS_SINCE_DREAM" -ge 24 ]] && [[ "$LAST_DREAM" != "0" || "$NEW_COUNT" -ge 5 ]]; then
-    # Only create dream-pending if we've had at least one dream before,
-    # or if this session has 5+ messages (avoid nudging on first-ever use)
-    touch "$HOME/.claude/.dream-pending"
+if [[ -f "$LAST_DREAM_FILE" ]]; then
+    read -r LAST_DREAM < "$LAST_DREAM_FILE" || LAST_DREAM=0
+    HOURS_SINCE_DREAM=$(( (NOW_EPOCH - LAST_DREAM) / 3600 ))
+    if [[ "$HOURS_SINCE_DREAM" -ge 24 ]]; then
+        touch "$PROJECT_DIR/.dream-pending"
+    fi
+elif [[ "$NEW_COUNT" -ge 5 ]]; then
+    # First-ever use: only flag after enough session activity
+    touch "$PROJECT_DIR/.dream-pending"
 fi
 
 # Output nudge if significant

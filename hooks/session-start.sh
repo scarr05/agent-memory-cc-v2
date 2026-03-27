@@ -92,11 +92,9 @@ mkdir -p "$PROJECT_DIR"
 
 # Check for pending checkpoints from prior sessions
 PENDING_CHECKPOINTS=()
-if [[ -d "$PROJECT_DIR" ]]; then
-    while IFS= read -r -d '' file; do
-        PENDING_CHECKPOINTS+=("$file")
-    done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
-fi
+while IFS= read -r -d '' file; do
+    PENDING_CHECKPOINTS+=("$file")
+done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
 
 # Check for session meta from prior session
 PRIOR_SESSION_INFO=""
@@ -143,8 +141,8 @@ if [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
     CONTEXT+="Process these to Obsidian \`5 Agent Memory/working/\` when appropriate, then delete the staging files.\n\n"
 fi
 
-# Check for pending dream consolidation
-if [[ -f "$HOME/.claude/.dream-pending" ]]; then
+# Dream consolidation nudge (per-project flag set by stop hook)
+if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
     CONTEXT+="💤 **Dream consolidation pending** (24+ hours since last dream). "
     CONTEXT+="Run \`/memory-sync --dream\` when you have a moment to consolidate recent session transcripts.\n\n"
 fi

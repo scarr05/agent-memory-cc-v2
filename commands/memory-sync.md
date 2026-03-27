@@ -110,28 +110,10 @@ If any decisions were made this session (from the `decisions:` frontmatter array
 list_directory("5 Agent Memory/sessions/by-project/<project-slug>/")
 ```
 
-2. If `_decisions.md` doesn't exist, create it:
+2. If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders:
 
 ```
-write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <content>)
-```
-
-Use the frontmatter template:
-
-```yaml
----
-title: "Decisions — <Project Name>"
-type: decisions
-project: "<project-slug>"
-created: <today's date>
-modified: <today's date>
----
-
-# Decisions — <Project Name>
-
-Append-only log of significant decisions for this project.
-
-<!-- Entries are appended below this line. Do not reorder or rewrite existing entries. -->
+write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <content from template>)
 ```
 
 3. For each decision in the session's `decisions:` array, append an entry using `patch_note`:
@@ -427,10 +409,10 @@ Convert each to an absolute date based on the note's `created` frontmatter date.
 
 ```bash
 date +%s > ~/.claude/memory-staging/<slug>/.last-dream
-rm -f ~/.claude/.dream-pending
+rm -f ~/.claude/memory-staging/<slug>/.dream-pending
 ```
 
-This resets the 24-hour timer checked by the Stop hook and clears the pending nudge.
+This resets the 24-hour timer checked by the Stop hook and clears the per-project pending nudge.
 
 ### Dream Report
 
