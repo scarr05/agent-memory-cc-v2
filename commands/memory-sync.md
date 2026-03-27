@@ -92,6 +92,53 @@ source_agent: "claude-code"
 <If resumable: true — include file paths, current state, exact next step. Enough context for a fresh agent to continue.>
 ```
 
+### Step 3.5: Append to Decisions Log
+
+If any decisions were made this session (from the `decisions:` frontmatter array in the session note just written):
+
+1. Check if `_decisions.md` exists in the project folder:
+
+```
+list_directory("5 Agent Memory/sessions/by-project/<project-slug>/")
+```
+
+2. If `_decisions.md` doesn't exist, create it:
+
+```
+write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <content>)
+```
+
+Use the frontmatter template:
+
+```yaml
+---
+title: "Decisions — <Project Name>"
+type: decisions
+project: "<project-slug>"
+created: <today's date>
+modified: <today's date>
+---
+
+# Decisions — <Project Name>
+
+Append-only log of significant decisions for this project.
+
+<!-- Entries are appended below this line. Do not reorder or rewrite existing entries. -->
+```
+
+3. For each decision in the session's `decisions:` array, append an entry using `patch_note`:
+
+```markdown
+
+### <date> — <Decision Title>
+**Context:** <infer from session context>
+**Decision:** <the decision as stated>
+**Rationale:** <infer from session discussion>
+**Source:** [[<session-note-filename>]]
+```
+
+4. Update the `modified` date in `_decisions.md` frontmatter using `update_frontmatter`.
+
 ### Step 4: Pattern Detection
 
 Review the session for recurring patterns. Check against existing learnings:
