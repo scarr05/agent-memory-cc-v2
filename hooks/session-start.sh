@@ -143,6 +143,12 @@ if [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
     CONTEXT+="Process these to Obsidian \`5 Agent Memory/working/\` when appropriate, then delete the staging files.\n\n"
 fi
 
+# Check for pending dream consolidation
+if [[ -f "$HOME/.claude/.dream-pending" ]]; then
+    CONTEXT+="💤 **Dream consolidation pending** (24+ hours since last dream). "
+    CONTEXT+="Run \`/memory-sync --dream\` when you have a moment to consolidate recent session transcripts.\n\n"
+fi
+
 if [[ -n "$PRIOR_SESSION_INFO" ]]; then
     PRIOR_COUNT=$(grep -oP '(?<=message_count=)\d+' <<< "$PRIOR_SESSION_INFO" || echo "0")
     if [[ "$PRIOR_COUNT" -gt 10 ]]; then
