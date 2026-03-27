@@ -9,6 +9,13 @@ allowed-tools:
   - "obsidian:list_directory"
   - "obsidian:update_frontmatter"
   - "obsidian:patch_note"
+  - "obsidian:read_multiple_notes"
+  - "obsidian:get_notes_info"
+  - "Agent"
+  - "Bash"
+  - "Read"
+  - "Grep"
+  - "Glob"
 ---
 
 # /memory-sync
@@ -19,8 +26,9 @@ Consolidate this session's context into the Obsidian vault. $ARGUMENTS
 
 Parse $ARGUMENTS for mode flags:
 - **(no args)** — Standard session sync (default)
-- **--ingest** — Also pull auto-memory from this project into vault
-- **--tidy** — Review old sessions for staleness and archive candidates
+- **--dream** — Deep consolidation: mine transcripts, cross-reference vault, prune stale sessions (includes --ingest and --tidy)
+- **--ingest** — Pull auto-memory from this project into vault (alias for dream Phase 3)
+- **--tidy** — Review old sessions for staleness and archive candidates (alias for dream Phase 4)
 - **--status** — Show current memory state without writing anything
 
 ## Standard Sync (default)
