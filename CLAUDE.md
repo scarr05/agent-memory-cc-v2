@@ -46,14 +46,11 @@ The slug is the primary key for all memory operations — it determines staging 
 Hooks communicate with Claude Code via JSON on stdout:
 ```json
 {
-  "hookSpecificOutput": {
-    "hookEventName": "<event>",
-    "additionalContext": "<markdown context string>"
-  }
+  "systemMessage": "<markdown context string>"
 }
 ```
 
-The Stop hook uses `"reason"` instead of `hookSpecificOutput` for nudge messages.
+The Stop hook uses `"reason"` instead of `systemMessage` for nudge messages.
 
 ## Installation
 

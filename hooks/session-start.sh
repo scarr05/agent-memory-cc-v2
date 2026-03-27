@@ -157,9 +157,6 @@ CONTEXT+="\`search_notes(query=\"$SLUG\", searchContent=true)\` in \`5 Agent Mem
 # Claude Code reads this and adds it to the model's context
 cat << HOOKJSON
 {
-  "hookSpecificOutput": {
-    "hookEventName": "SessionStart",
-    "additionalContext": "$(echo -e "$CONTEXT" | sed 's/"/\\"/g' | tr '\n' ' ')"
-  }
+  "systemMessage": "$(echo -e "$CONTEXT" | sed 's/"/\\"/g' | tr '\n' ' ')"
 }
 HOOKJSON

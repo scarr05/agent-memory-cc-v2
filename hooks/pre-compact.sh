@@ -75,9 +75,6 @@ EOF
 # Output context telling Claude about the checkpoint
 cat << HOOKJSON
 {
-  "hookSpecificOutput": {
-    "hookEventName": "PreCompact",
-    "additionalContext": "Pre-compaction checkpoint created at $CHECKPOINT_FILE. Before compaction completes, write the current session state (decisions, progress, open items, next steps) into this file. After compaction, process it to Obsidian 5 Agent Memory/working/$SLUG-checkpoint.md via MCP."
-  }
+  "systemMessage": "Pre-compaction checkpoint created at $CHECKPOINT_FILE. Before compaction completes, write the current session state (decisions, progress, open items, next steps) into this file. After compaction, process it to Obsidian 5 Agent Memory/working/$SLUG-checkpoint.md via MCP."
 }
 HOOKJSON
