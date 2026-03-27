@@ -334,3 +334,148 @@ For each hit, extract:
 - **Confidence** — high (explicit, unambiguous statement), medium (likely but needs context), low (might be noise)
 
 Discard low-confidence hits. Keep medium and high for the consolidation report.
+
+### Dream Phase 3: Consolidate
+
+Cross-reference findings from Phase 2 against the baseline from Phase 1.
+
+#### 3.1 Deduplicate
+
+For each finding, search the vault for existing coverage:
+
+- **Decisions** — search `_decisions.md` for the same topic. If already logged, skip.
+- **Corrections** — search `5 Agent Memory/learnings/corrections/` for the same correction.
+- **Preferences** — search `5 Agent Memory/learnings/preferences/` for the same preference.
+- **Workflow patterns** — search `5 Agent Memory/learnings/workflow/` for the same pattern.
+
+Use `search_notes(query="<key phrase>", searchContent=true)` for each finding.
+
+#### 3.2 Detect Contradictions
+
+If a new finding conflicts with an existing record, flag it:
+
+```markdown
+## Contradictions Found
+
+| Existing | New | Source |
+|----------|-----|--------|
+| "<existing statement>" (<file>, <date>) | "<new statement>" (transcript <date>) | Transcript grep |
+| **Action needed:** Is this a project-specific override or a change in preference? |
+```
+
+Never auto-resolve contradictions. Present them in the dream report for the user to decide.
+
+#### 3.3 Categorise Findings
+
+Route each non-duplicate, non-contradicting finding to its destination:
+
+| Finding type | Destination | Action |
+|-------------|-------------|--------|
+| Decision | `_decisions.md` | Append entry with `source: dream (transcript: <date>)` |
+| Correction | `learnings/corrections/` | Propose as new learning |
+| Preference | `learnings/preferences/` | Propose as new learning |
+| Workflow pattern | `learnings/workflow/` | Propose as new learning |
+
+**All findings go into the approval report first.** Nothing is written until the user approves.
+
+#### 3.4 Auto-Memory Ingest
+
+If auto-memory exists at `~/.claude/projects/<project>/memory/`:
+
+1. Read `MEMORY.md` and any topic files
+2. For each item, search Obsidian for existing coverage (same deduplication as above)
+3. Route genuinely new items:
+   - Preferences/patterns → propose as learnings
+   - Build commands/debug insights → propose for project session notes
+   - Architecture context → propose for project CLAUDE.md
+
+This absorbs the existing `--ingest` behaviour. Running `/memory-sync --ingest` now routes to this phase.
+
+### Dream Phase 4: Prune & Index
+
+#### 4.1 Stale Sessions
+
+Search for sessions older than 90 days:
+
+```
+search_notes(query="status: complete", searchFrontmatter=true)
+```
+
+For each session older than 90 days with `status: complete` and no `promoted_to` field, add to the prune list in the dream report.
+
+This absorbs the existing `--tidy` behaviour. Running `/memory-sync --tidy` now routes to this phase.
+
+#### 4.2 Rebuild Project Index
+
+Read `5 Agent Memory/project-index.md`. For the current project:
+- Update last session date
+- Update session count
+- Update any other stale fields
+
+```
+patch_note("5 Agent Memory/project-index.md", <old row>, <new row>)
+```
+
+#### 4.3 Date Normalisation
+
+Scan recent vault notes (last 30 days of session notes for this project) for relative dates:
+- "yesterday", "today", "last week", "next Monday", etc.
+
+Convert each to an absolute date based on the note's `created` frontmatter date. Use `patch_note` for each replacement.
+
+#### 4.4 Write Dream Timestamp
+
+```bash
+date +%s > ~/.claude/memory-staging/<slug>/.last-dream
+rm -f ~/.claude/.dream-pending
+```
+
+This resets the 24-hour timer checked by the Stop hook and clears the pending nudge.
+
+### Dream Report
+
+After all four phases, present the full report for approval:
+
+```markdown
+## Dream Report — <date>
+
+### New Decisions Found (<N>)
+- [ ] <Decision 1> (<date>, <confidence>)
+- [ ] <Decision 2> (<date>, <confidence>)
+
+### New Learnings Proposed (<N>)
+- [ ] Correction: "<correction text>" (<date>)
+- [ ] Preference: "<preference text>" (<date>)
+- [ ] Workflow: "<pattern text>" (<date>)
+
+### Contradictions (<N>)
+<contradiction table from Phase 3.2>
+
+### Auto-Memory Items (<N>)
+- [ ] <item 1> → <proposed destination>
+- [ ] <item 2> → <proposed destination>
+
+### Stale Sessions (<N>)
+- [ ] <session filename> (<date>) — archive?
+
+### Date Corrections (<N>)
+- <file>: "yesterday" → "2026-03-26"
+
+### Stats
+- Transcripts scanned: <N>
+- Findings: <N> (<breakdown by type>)
+- Deduplicated: <N> (already in vault)
+- Contradictions: <N>
+```
+
+The user checks boxes for what to write. For each checked item:
+- **Decisions** → append to `_decisions.md` via `patch_note`
+- **Learnings** → write to appropriate `learnings/<category>/` subfolder via `write_note`
+- **Contradictions** → user states which version to keep; update or remove the stale record
+- **Auto-memory items** → write to stated destination
+- **Stale sessions** → move to archive or delete (as user directs)
+- **Date corrections** → apply via `patch_note`
+
+Unchecked items are discarded.
+
+After writing approved items, update the dream timestamp (Phase 4.4).
