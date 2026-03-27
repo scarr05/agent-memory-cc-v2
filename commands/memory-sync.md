@@ -258,3 +258,79 @@ Show current memory state without writing anything:
 3. Any working/ files still active
 4. Auto-memory file count for current project
 5. Last sync date (from most recent session note)
+
+---
+
+## Dream Mode (--dream)
+
+Deep memory consolidation across all three tiers. Mines recent session transcripts for decisions, corrections, and preferences that were never explicitly logged, then cross-references against the Obsidian vault.
+
+Scope: current project only.
+
+### Dream Phase 1: Orient
+
+Read current state from both tiers to build a baseline of what's already captured.
+
+**Tier 2 — auto-memory:**
+
+```bash
+# Find the auto-memory directory for this project
+ls ~/.claude/projects/*/memory/MEMORY.md 2>/dev/null
+```
+
+If found, read `MEMORY.md` and note existing entries.
+
+**Tier 3 — Obsidian vault (via MCP):**
+
+```
+read_note("5 Agent Memory/project-index.md")
+list_directory("5 Agent Memory/sessions/by-project/<slug>/")
+list_directory("5 Agent Memory/learnings/")
+```
+
+If `_decisions.md` exists, read it:
+
+```
+read_note("5 Agent Memory/sessions/by-project/<slug>/_decisions.md")
+```
+
+Read the 2-3 most recent session notes (frontmatter only via `get_frontmatter`) to understand what's already been captured.
+
+Build a mental map: what topics are covered, what decisions are logged, what learnings exist. This is the deduplication baseline — dream only extracts what's genuinely new.
+
+### Dream Phase 2: Gather Signal
+
+Find recent JSONL session transcripts for the current project:
+
+```bash
+find ~/.claude/projects/ -path "*sessions/*.jsonl" -mtime -7 2>/dev/null | sort -r | head -20
+```
+
+**Token-efficient scanning strategy — never read full transcript files:**
+
+1. **Grep first** — use the Grep tool to pattern match against JSONL files. This returns only matching lines with surrounding context, not entire files.
+
+2. **Extract content with jq** — for each matching line, extract just the human-readable content:
+
+```bash
+# Extract user message content from a matching JSONL line
+echo '<matching-line>' | jq -r 'select(.type == "human") | .message.content[] | select(.type == "text") | .text' 2>/dev/null
+```
+
+3. **Read context only for high-confidence hits** — if a grep match looks promising, read 5-10 surrounding lines from the JSONL file to verify the context.
+
+**Signal patterns to grep for:**
+
+| Signal Type | Grep Pattern | Destination |
+|------------|-------------|-------------|
+| Corrections | `actually\|no,\|wrong\|incorrect\|not right\|stop doing\|I meant` | `learnings/corrections/` |
+| Preferences | `I prefer\|always use\|never use\|from now on\|default to\|remember that` | `learnings/preferences/` |
+| Decisions | `let's go with\|I decided\|we're using\|the plan is\|switch to\|we agreed` | `_decisions.md` |
+| Recurring patterns | `again\|every time\|keep forgetting\|as usual\|same as before\|we always` | `learnings/workflow/` |
+
+For each hit, extract:
+- **The fact** — what was said
+- **The date** — from the JSONL file modification time
+- **Confidence** — high (explicit, unambiguous statement), medium (likely but needs context), low (might be noise)
+
+Discard low-confidence hits. Keep medium and high for the consolidation report.
