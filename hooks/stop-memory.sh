@@ -48,9 +48,9 @@ fi
 # Check session duration
 SESSION_START=$(grep -oP '(?<=session_start=).*' "$META_FILE" 2>/dev/null || echo "")
 DURATION_MINS=0
+NOW_EPOCH=$(date +%s)
 if [[ -n "$SESSION_START" ]]; then
     START_EPOCH=$(date -d "$SESSION_START" +%s 2>/dev/null || echo "0")
-    NOW_EPOCH=$(date +%s)
     if [[ "$START_EPOCH" -gt 0 ]]; then
         DURATION_MINS=$(( (NOW_EPOCH - START_EPOCH) / 60 ))
     fi
@@ -70,7 +70,7 @@ if [[ "$DURATION_MINS" -ge 45 ]] && ! grep -q 'duration_nudge_sent=true' "$META_
 fi
 
 # --- Dream timer check ---
-# Uses NOW_EPOCH from duration check above to avoid redundant date subprocess
+# Uses NOW_EPOCH set above
 LAST_DREAM_FILE="$PROJECT_DIR/.last-dream"
 if [[ -f "$LAST_DREAM_FILE" ]]; then
     read -r LAST_DREAM < "$LAST_DREAM_FILE" || LAST_DREAM=0
