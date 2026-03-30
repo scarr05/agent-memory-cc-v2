@@ -12,7 +12,7 @@ CLAUDE_MD=".claude/CLAUDE.md"
 detect_slug() {
     if [[ -f "$CLAUDE_MD" ]]; then
         local slug
-        slug=$(grep -oP '(?<=memory:project-slug=)[^\s-]+[a-z0-9-]*' "$CLAUDE_MD" 2>/dev/null || true)
+        slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
         if [[ -n "$slug" ]]; then echo "$slug"; return 0; fi
     fi
 
@@ -39,8 +39,10 @@ mkdir -p "$PROJECT_DIR"
 MESSAGE_COUNT=0
 SESSION_START=""
 if [[ -f "$PROJECT_DIR/.session-meta" ]]; then
-    MESSAGE_COUNT=$(grep -oP '(?<=message_count=)\d+' "$PROJECT_DIR/.session-meta" || echo "0")
-    SESSION_START=$(grep -oP '(?<=session_start=).*' "$PROJECT_DIR/.session-meta" || echo "unknown")
+    MESSAGE_COUNT=$(sed -n 's/.*message_count=\([0-9]*\).*/\1/p' "$PROJECT_DIR/.session-meta" 2>/dev/null | head -1)
+    MESSAGE_COUNT="${MESSAGE_COUNT:-0}"
+    SESSION_START=$(sed -n 's/.*session_start=\(.*\)/\1/p' "$PROJECT_DIR/.session-meta" 2>/dev/null | head -1)
+    SESSION_START="${SESSION_START:-unknown}"
 fi
 
 # Write checkpoint stub
