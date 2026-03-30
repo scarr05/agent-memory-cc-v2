@@ -8,17 +8,25 @@ set -euo pipefail
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
 
-# Fast slug detection (minimal checks for performance)
-detect_slug_fast() {
-    if [[ -f "$CLAUDE_MD" ]]; then
-        local slug
-        slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1)
-        if [[ -n "$slug" ]]; then echo "$slug"; return 0; fi
-    fi
-    basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
-}
+# Fast slug detection: state file first, then minimal fallback
+STATE_FILE=".claude/memory-state.json"
+SLUG=""
 
-SLUG=$(detect_slug_fast)
+# Try state file first (fastest, most reliable)
+if [[ -f "$STATE_FILE" ]]; then
+    SLUG=$(jq -r '.slug // empty' "$STATE_FILE" 2>/dev/null || true)
+fi
+
+# Fallback: minimal detection
+if [[ -z "$SLUG" ]]; then
+    if [[ -f "$CLAUDE_MD" ]]; then
+        SLUG=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1)
+    fi
+fi
+
+if [[ -z "$SLUG" ]]; then
+    SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+fi
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 META_FILE="$PROJECT_DIR/.session-meta"
 
