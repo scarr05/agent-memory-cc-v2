@@ -11,7 +11,9 @@ CLAUDE_MD=".claude/CLAUDE.md"
 # Fast slug detection (minimal checks for performance)
 detect_slug_fast() {
     if [[ -f "$CLAUDE_MD" ]]; then
-        grep -oP '(?<=memory:project-slug=)[^\s-]+[a-z0-9-]*' "$CLAUDE_MD" 2>/dev/null && return 0
+        local slug
+        slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1)
+        if [[ -n "$slug" ]]; then echo "$slug"; return 0; fi
     fi
     basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
 }
@@ -34,7 +36,8 @@ EOF
 fi
 
 # Increment message count
-CURRENT_COUNT=$(grep -oP '(?<=message_count=)\d+' "$META_FILE" 2>/dev/null || echo "0")
+CURRENT_COUNT=$(sed -n 's/.*message_count=\([0-9]*\).*/\1/p' "$META_FILE" 2>/dev/null | head -1)
+CURRENT_COUNT="${CURRENT_COUNT:-0}"
 NEW_COUNT=$((CURRENT_COUNT + 1))
 sed -i "s/message_count=$CURRENT_COUNT/message_count=$NEW_COUNT/" "$META_FILE"
 
@@ -46,7 +49,8 @@ else
 fi
 
 # Check session duration
-SESSION_START=$(grep -oP '(?<=session_start=).*' "$META_FILE" 2>/dev/null || echo "")
+SESSION_START=$(sed -n 's/.*session_start=\(.*\)/\1/p' "$META_FILE" 2>/dev/null | head -1)
+SESSION_START="${SESSION_START:-}"
 DURATION_MINS=0
 NOW_EPOCH=$(date +%s)
 if [[ -n "$SESSION_START" ]]; then
