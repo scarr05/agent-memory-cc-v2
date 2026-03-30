@@ -37,6 +37,7 @@ The hook gives you the slug. Use it:
 - If the Stop hook nudges about session length, acknowledge it
 - If context hits ~50%, checkpoint to `working/` before compaction
 - The PreCompact hook creates a staging file automatically — fill it in with actual session state when you can
+- If memory context is missing after compaction or `/clear`, run `/memory-load` to restore it. Persistent state is in `.claude/memory-state.json`.
 
 ### Session End
 

@@ -191,6 +191,26 @@ On session end, run `/memory-sync` if significant decisions or progress were mad
 <Leave empty for the user to populate. Add a comment: "Add project-specific rules here.">
 ```
 
+### 3.1 Write Persistent State File
+
+After creating/updating `.claude/CLAUDE.md`, write the state file:
+
+```bash
+cat > .claude/memory-state.json << 'STATEJSON'
+{
+  "slug": "<confirmed-slug>",
+  "area": "<confirmed-area>",
+  "sessionPath": "5 Agent Memory/sessions/by-project/<confirmed-slug>/",
+  "detectedVia": "memory-init",
+  "pendingCheckpoints": [],
+  "dreamPending": false,
+  "lastUpdated": "<current-ISO-timestamp>"
+}
+STATEJSON
+```
+
+This ensures the state file exists immediately, rather than waiting for the next SessionStart hook to create it.
+
 ## Phase 4: Create Obsidian Structure
 
 Via MCP-Obsidian:
