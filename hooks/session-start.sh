@@ -16,6 +16,18 @@ detect_slug() {
         local slug
         slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
         if [[ -n "$slug" ]]; then
+            echo "claude-md-metadata" > "$_DETECTED_VIA_FILE"
+            echo "$slug"
+            return 0
+        fi
+    fi
+
+    # Priority 1b: .claude/memory-state.json from prior session
+    if [[ -f ".claude/memory-state.json" ]]; then
+        local slug
+        slug=$(jq -r '.slug // empty' .claude/memory-state.json 2>/dev/null || true)
+        if [[ -n "$slug" ]]; then
+            echo "memory-state-file" > "$_DETECTED_VIA_FILE"
             echo "$slug"
             return 0
         fi
@@ -26,6 +38,7 @@ detect_slug() {
         local slug
         slug=$(jq -r '.memory.projectSlug // empty' .claude/settings.json 2>/dev/null || true)
         if [[ -n "$slug" ]]; then
+            echo "settings-json" > "$_DETECTED_VIA_FILE"
             echo "$slug"
             return 0
         fi
@@ -40,6 +53,7 @@ detect_slug() {
             local slug
             slug=$(echo "$remote" | sed -E 's/.*[:/]([^/]+)\.git$/\1/' | sed -E 's/.*[:/]([^/]+)$/\1/' | tr '[:upper:]' '[:lower:]')
             if [[ -n "$slug" ]]; then
+                echo "git-remote" > "$_DETECTED_VIA_FILE"
                 echo "$slug"
                 return 0
             fi
@@ -51,6 +65,7 @@ detect_slug() {
         local slug
         slug=$(jq -r '.name // empty' package.json 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
         if [[ -n "$slug" ]]; then
+            echo "package-json" > "$_DETECTED_VIA_FILE"
             echo "$slug"
             return 0
         fi
@@ -58,14 +73,16 @@ detect_slug() {
 
     if [[ -f "pyproject.toml" ]]; then
         local slug
-        slug=$(grep -oP '(?<=name = ")[^"]+' pyproject.toml 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
+        slug=$(sed -n 's/.*name = "\([^"]*\)".*/\1/p' pyproject.toml 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
         if [[ -n "$slug" ]]; then
+            echo "pyproject-toml" > "$_DETECTED_VIA_FILE"
             echo "$slug"
             return 0
         fi
     fi
 
     # Priority 5: Directory name
+    echo "directory-name" > "$_DETECTED_VIA_FILE"
     basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
 }
 
@@ -83,12 +100,53 @@ detect_area() {
 
 # --- Main ---
 
+_DETECTED_VIA_FILE=$(mktemp 2>/dev/null || echo "/tmp/memory-detected-via-$$")
+DETECTED_VIA=""
 SLUG=$(detect_slug)
+DETECTED_VIA=$(cat "$_DETECTED_VIA_FILE" 2>/dev/null || echo "")
+rm -f "$_DETECTED_VIA_FILE"
 AREA=$(detect_area)
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 
 # Ensure staging directory exists
 mkdir -p "$PROJECT_DIR"
+
+# --- Write persistent state file ---
+STATE_FILE=".claude/memory-state.json"
+mkdir -p .claude
+
+# Scan pending checkpoints for state file
+CHECKPOINT_JSON="[]"
+if [[ -d "$PROJECT_DIR" ]]; then
+    CHECKPOINT_LIST=""
+    while IFS= read -r -d '' file; do
+        if [[ -n "$CHECKPOINT_LIST" ]]; then
+            CHECKPOINT_LIST="$CHECKPOINT_LIST, "
+        fi
+        CHECKPOINT_LIST="$CHECKPOINT_LIST\"$file\""
+    done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
+    if [[ -n "$CHECKPOINT_LIST" ]]; then
+        CHECKPOINT_JSON="[$CHECKPOINT_LIST]"
+    fi
+fi
+
+# Check dream-pending
+DREAM_PENDING="false"
+if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
+    DREAM_PENDING="true"
+fi
+
+cat > "$STATE_FILE" << STATEJSON
+{
+  "slug": "$SLUG",
+  "area": "$AREA",
+  "sessionPath": "5 Agent Memory/sessions/by-project/$SLUG/",
+  "detectedVia": "$DETECTED_VIA",
+  "pendingCheckpoints": $CHECKPOINT_JSON,
+  "dreamPending": $DREAM_PENDING,
+  "lastUpdated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+STATEJSON
 
 # Check for pending checkpoints from prior sessions
 PENDING_CHECKPOINTS=()
