@@ -14,7 +14,7 @@ detect_slug() {
     # Priority 1: Existing CLAUDE.md metadata
     if [[ -f "$CLAUDE_MD" ]]; then
         local slug
-        slug=$(grep -oP '(?<=memory:project-slug=)[^\s-]+[a-z0-9-]*' "$CLAUDE_MD" 2>/dev/null || true)
+        slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
         if [[ -n "$slug" ]]; then
             echo "$slug"
             return 0
@@ -72,7 +72,7 @@ detect_slug() {
 detect_area() {
     if [[ -f "$CLAUDE_MD" ]]; then
         local area
-        area=$(grep -oP '(?<=memory:area=)[^\s]+' "$CLAUDE_MD" 2>/dev/null || true)
+        area=$(sed -n 's/.*memory:area=\([^ ]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
         if [[ -n "$area" ]]; then
             echo "$area"
             return 0
@@ -148,7 +148,8 @@ if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
 fi
 
 if [[ -n "$PRIOR_SESSION_INFO" ]]; then
-    PRIOR_COUNT=$(grep -oP '(?<=message_count=)\d+' <<< "$PRIOR_SESSION_INFO" || echo "0")
+    PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
+    PRIOR_COUNT="${PRIOR_COUNT:-0}"
     if [[ "$PRIOR_COUNT" -gt 10 ]]; then
         CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced to Obsidian (\`/memory-sync --status\`).\n\n"
     fi
