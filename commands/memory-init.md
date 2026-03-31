@@ -25,6 +25,15 @@ Initialise this project for the persistent memory system. $ARGUMENTS
 
 If $ARGUMENTS contains a project name/slug, use that. Otherwise, auto-detect.
 
+## Phase 0: Check CLI Availability
+
+```bash
+${OBSIDIAN_CLI_PATH:-obsidian} version 2>/dev/null
+```
+
+If the CLI is available, note the version. If not, warn:
+"Obsidian CLI not available. The memory system will work via MCP but subagents (memberberry, blackbox) need the CLI for optimal performance. See docs/cli-setup.md for setup instructions."
+
 ## Phase 1: Detect Project Identity
 
 Run these detection steps and collect results. Don't ask for confirmation until you have everything.
@@ -182,6 +191,9 @@ This project uses the persistent memory system.
 - **Obsidian sessions:** `5 Agent Memory/sessions/by-project/<slug>/`
 - **Area:** `<area>`
 - **Related vault notes:** `<vault-path>`
+- Use **memberberry** agent for prior context retrieval
+- Use **blackbox** agent for checkpoint capture before compaction
+- Do NOT call MCP search_notes or read vault notes directly
 
 On session start, search for prior context before starting non-trivial work.
 On session end, run `/memory-sync` if significant decisions or progress were made.
