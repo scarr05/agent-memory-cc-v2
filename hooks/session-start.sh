@@ -1,22 +1,25 @@
 #!/usr/bin/env bash
-# session-start.sh — SessionStart hook for memory system
-# Detects project, checks for pending memory, injects context pointer
-# Receives JSON on stdin with session info
+# session-start.sh — SessionStart hook for memory system (v3)
+# Uses Obsidian CLI for vault reads, directs agent to subagents
+# Falls back gracefully if CLI unavailable
 
 set -euo pipefail
 
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
+OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
-# --- Project slug detection ---
+# --- Project slug detection (unchanged from v2) ---
 
 detect_slug() {
+    _DETECTED_VIA=""
+
     # Priority 1: Existing CLAUDE.md metadata
     if [[ -f "$CLAUDE_MD" ]]; then
         local slug
         slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
         if [[ -n "$slug" ]]; then
-            echo "claude-md-metadata" > "$_DETECTED_VIA_FILE"
+            _DETECTED_VIA="claude-md-metadata"
             echo "$slug"
             return 0
         fi
@@ -27,7 +30,7 @@ detect_slug() {
         local slug
         slug=$(jq -r '.slug // empty' .claude/memory-state.json 2>/dev/null || true)
         if [[ -n "$slug" ]]; then
-            echo "memory-state-file" > "$_DETECTED_VIA_FILE"
+            _DETECTED_VIA="memory-state-file"
             echo "$slug"
             return 0
         fi
@@ -38,7 +41,7 @@ detect_slug() {
         local slug
         slug=$(jq -r '.memory.projectSlug // empty' .claude/settings.json 2>/dev/null || true)
         if [[ -n "$slug" ]]; then
-            echo "settings-json" > "$_DETECTED_VIA_FILE"
+            _DETECTED_VIA="settings-json"
             echo "$slug"
             return 0
         fi
@@ -49,11 +52,10 @@ detect_slug() {
         local remote
         remote=$(git remote get-url origin 2>/dev/null || true)
         if [[ -n "$remote" ]]; then
-            # Extract repo name from various URL formats
             local slug
             slug=$(echo "$remote" | sed -E 's/.*[:/]([^/]+)\.git$/\1/' | sed -E 's/.*[:/]([^/]+)$/\1/' | tr '[:upper:]' '[:lower:]')
             if [[ -n "$slug" ]]; then
-                echo "git-remote" > "$_DETECTED_VIA_FILE"
+                _DETECTED_VIA="git-remote"
                 echo "$slug"
                 return 0
             fi
@@ -65,7 +67,7 @@ detect_slug() {
         local slug
         slug=$(jq -r '.name // empty' package.json 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
         if [[ -n "$slug" ]]; then
-            echo "package-json" > "$_DETECTED_VIA_FILE"
+            _DETECTED_VIA="package-json"
             echo "$slug"
             return 0
         fi
@@ -75,14 +77,14 @@ detect_slug() {
         local slug
         slug=$(sed -n 's/.*name = "\([^"]*\)".*/\1/p' pyproject.toml 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
         if [[ -n "$slug" ]]; then
-            echo "pyproject-toml" > "$_DETECTED_VIA_FILE"
+            _DETECTED_VIA="pyproject-toml"
             echo "$slug"
             return 0
         fi
     fi
 
     # Priority 5: Directory name
-    echo "directory-name" > "$_DETECTED_VIA_FILE"
+    _DETECTED_VIA="directory-name"
     basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
 }
 
@@ -100,11 +102,9 @@ detect_area() {
 
 # --- Main ---
 
-_DETECTED_VIA_FILE=$(mktemp 2>/dev/null || echo "/tmp/memory-detected-via-$$")
-DETECTED_VIA=""
+_DETECTED_VIA=""
 SLUG=$(detect_slug)
-DETECTED_VIA=$(cat "$_DETECTED_VIA_FILE" 2>/dev/null || echo "")
-rm -f "$_DETECTED_VIA_FILE"
+DETECTED_VIA="$_DETECTED_VIA"
 AREA=$(detect_area)
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 
@@ -115,7 +115,6 @@ mkdir -p "$PROJECT_DIR"
 STATE_FILE=".claude/memory-state.json"
 mkdir -p .claude
 
-# Scan pending checkpoints for state file
 CHECKPOINT_JSON="[]"
 if [[ -d "$PROJECT_DIR" ]]; then
     CHECKPOINT_LIST=""
@@ -130,7 +129,6 @@ if [[ -d "$PROJECT_DIR" ]]; then
     fi
 fi
 
-# Check dream-pending
 DREAM_PENDING="false"
 if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
     DREAM_PENDING="true"
@@ -148,19 +146,19 @@ cat > "$STATE_FILE" << STATEJSON
 }
 STATEJSON
 
-# Check for pending checkpoints from prior sessions
+# Check for pending checkpoints
 PENDING_CHECKPOINTS=()
 while IFS= read -r -d '' file; do
     PENDING_CHECKPOINTS+=("$file")
 done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
 
-# Check for session meta from prior session
+# Check prior session info
 PRIOR_SESSION_INFO=""
 if [[ -f "$PROJECT_DIR/.session-meta" ]]; then
     PRIOR_SESSION_INFO=$(cat "$PROJECT_DIR/.session-meta")
 fi
 
-# Reset session meta for new session
+# Reset session meta
 cat > "$PROJECT_DIR/.session-meta" << EOF
 session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 message_count=0
@@ -168,58 +166,122 @@ project_slug=$SLUG
 area=$AREA
 EOF
 
-# Check if memory-init has been run (CLAUDE.md has memory metadata)
+# Check if memory-init has been run
 HAS_MEMORY_CONFIG="false"
 if [[ -f "$CLAUDE_MD" ]] && grep -q 'memory:project-slug=' "$CLAUDE_MD" 2>/dev/null; then
     HAS_MEMORY_CONFIG="true"
 fi
 
+# --- CLI availability check ---
+CLI_OK="true"
+"$OBS" version > /dev/null 2>&1 || CLI_OK="false"
+
 # --- Build context injection ---
-
-CONTEXT="## Memory System Active\n"
-CONTEXT+="Project slug: \`$SLUG\`\n"
-
-if [[ -n "$AREA" ]]; then
-    CONTEXT+="Area: \`$AREA\`\n"
-fi
-
-CONTEXT+="Obsidian session path: \`5 Agent Memory/sessions/by-project/$SLUG/\`\n\n"
+CONTEXT="## Memory System Active\\n"
+CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n\\n"
 
 if [[ "$HAS_MEMORY_CONFIG" == "false" ]]; then
-    CONTEXT+="⚠ **No memory configuration found.** This project hasn't been initialised with \`/memory-init\`. "
-    CONTEXT+="Run \`/memory-init\` to set up the project slug, create the Obsidian folder structure, and load any prior context. "
-    CONTEXT+="Using auto-detected slug \`$SLUG\` for now.\n\n"
+    CONTEXT+="⚠ **No memory config.** Run \`/memory-init\` to set up. Using auto-detected slug \`$SLUG\`.\\n\\n"
 fi
 
+# --- Git state ---
+CONTEXT+="### Git\\n"
+if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+    BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+    CONTEXT+="Branch: \`$BRANCH\`"
+    DIRTY_COUNT=$(git status --short 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$DIRTY_COUNT" -gt 0 ]]; then
+        CONTEXT+=" ($DIRTY_COUNT dirty files)"
+    else
+        CONTEXT+=" (clean)"
+    fi
+    CONTEXT+="\\n"
+    RECENT=$(git log --oneline -3 2>/dev/null || true)
+    if [[ -n "$RECENT" ]]; then
+        CONTEXT+="Recent: $(echo "$RECENT" | head -1)\\n"
+    fi
+else
+    CONTEXT+="Not a git repo.\\n"
+fi
+CONTEXT+="\\n"
+
+# --- CLI-driven vault state ---
+if [[ "$CLI_OK" == "true" ]]; then
+
+    # Project status from index
+    INDEX_ROW=$("$OBS" search:context query="$SLUG" path="5 Agent Memory/project-index.md" format=json 2>/dev/null || echo "")
+    if [[ -n "$INDEX_ROW" ]] && [[ "$INDEX_ROW" != "[]" ]]; then
+        CONTEXT+="### Project Status\\n"
+        # Extract just the matching text lines
+        INDEX_TEXT=$(echo "$INDEX_ROW" | jq -r '.[0].matches[].text' 2>/dev/null | head -3 || true)
+        if [[ -n "$INDEX_TEXT" ]]; then
+            CONTEXT+="$INDEX_TEXT\\n"
+        fi
+        CONTEXT+="\\n"
+    fi
+
+    # Open tasks
+    TASKS=$("$OBS" search:context query="- \[ \]" path="5 Agent Memory/sessions/by-project/$SLUG" format=json limit=5 2>/dev/null || echo "")
+    if [[ -n "$TASKS" ]] && [[ "$TASKS" != "[]" ]]; then
+        CONTEXT+="### Open Items\\n"
+        TASK_LINES=$(echo "$TASKS" | jq -r '.[].matches[].text' 2>/dev/null | head -5 || true)
+        if [[ -n "$TASK_LINES" ]]; then
+            CONTEXT+="$(echo "$TASK_LINES" | sed 's/^/  /')\\n"
+        fi
+        CONTEXT+="\\n"
+    fi
+
+    # Working files
+    WORKING=$("$OBS" search query="$SLUG" path="5 Agent Memory/working" format=json 2>/dev/null || echo "")
+    if [[ -n "$WORKING" ]] && [[ "$WORKING" != "[]" ]]; then
+        CONTEXT+="### Working Files\\n"
+        CONTEXT+="$(echo "$WORKING" | jq -r '.[]' 2>/dev/null | head -5 | sed 's/^/- /')\\n\\n"
+    fi
+
+    # Corrections flag
+    CORRECTIONS=$("$OBS" search query="$SLUG" path="5 Agent Memory/learnings/corrections" format=json 2>/dev/null || echo "")
+    if [[ -n "$CORRECTIONS" ]] && [[ "$CORRECTIONS" != "[]" ]]; then
+        CONTEXT+="### ⚠ Corrections exist — load via memberberry before making assumptions\\n\\n"
+    fi
+
+    # Session depth
+    SESSION_COUNT=$("$OBS" search query="type: session" path="5 Agent Memory/sessions/by-project/$SLUG" format=json 2>/dev/null || echo "[]")
+    COUNT=$(echo "$SESSION_COUNT" | jq 'length' 2>/dev/null || echo "0")
+    CONTEXT+="Memory depth: $COUNT prior sessions\\n\\n"
+
+else
+    CONTEXT+="⚠ Obsidian CLI unavailable. Open Obsidian or check PATH.\\n"
+    CONTEXT+="Falling back to minimal context. Use MCP for vault access.\\n\\n"
+fi
+
+# --- Pending checkpoints ---
 if [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
-    CONTEXT+="📋 **Pending checkpoints from prior session(s):**\n"
+    CONTEXT+="### Pending Checkpoints\\n"
     for cp in "${PENDING_CHECKPOINTS[@]}"; do
-        CONTEXT+="- \`$cp\`\n"
+        CONTEXT+="- \`$cp\`\\n"
     done
-    CONTEXT+="Process these to Obsidian \`5 Agent Memory/working/\` when appropriate, then delete the staging files.\n\n"
+    CONTEXT+="Process these to Obsidian \`5 Agent Memory/working/\` then delete staging files.\\n\\n"
 fi
 
-# Dream consolidation nudge (per-project flag set by stop hook)
+# Dream nudge
 if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
-    CONTEXT+="💤 **Dream consolidation pending** (24+ hours since last dream). "
-    CONTEXT+="Run \`/memory-sync --dream\` when you have a moment to consolidate recent session transcripts.\n\n"
+    CONTEXT+="💤 **Dream consolidation pending.** Run \`/memory-sync --dream\` when ready.\\n\\n"
 fi
 
+# Prior session info
 if [[ -n "$PRIOR_SESSION_INFO" ]]; then
     PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
     PRIOR_COUNT="${PRIOR_COUNT:-0}"
     if [[ "$PRIOR_COUNT" -gt 10 ]]; then
-        CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced to Obsidian (\`/memory-sync --status\`).\n\n"
+        CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced (\`/memory-sync --status\`).\\n\\n"
     fi
 fi
 
-CONTEXT+="**For non-trivial tasks:** Search Obsidian for prior context before starting:\n"
-CONTEXT+="\`search_notes(query=\"$SLUG\", searchContent=true)\` in \`5 Agent Memory/\`\n"
+# --- Delegation guidance ---
+CONTEXT+="### Memory Agents\\n"
+CONTEXT+="→ For prior context: delegate to **memberberry** subagent.\\n"
+CONTEXT+="→ For checkpoint capture: delegate to **blackbox** subagent.\\n"
+CONTEXT+="→ Do NOT call MCP search_notes or read vault notes directly.\\n"
 
-# Output context injection via JSON to stdout
-# Claude Code reads this and adds it to the model's context
-cat << HOOKJSON
-{
-  "systemMessage": "$(echo -e "$CONTEXT" | sed 's/"/\\"/g' | tr '\n' ' ')"
-}
-HOOKJSON
+# --- Output ---
+jq -n --arg msg "$(echo -e "$CONTEXT")" '{"systemMessage": $msg}'
