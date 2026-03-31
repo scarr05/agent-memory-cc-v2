@@ -11,17 +11,22 @@ Persistent memory system stored in your Obsidian vault at `5 Agent Memory/`. Enf
 
 ```
 ┌────────────────────────────────────────────────────┐
-│  TIER 3 — COLD  (Obsidian: 5 Agent Memory/)       │
-│  Cross-project, human-curated, permanent           │
+│  LAYER 4 — READ-ONCE  (PreToolUse hook)            │
+│  Deduplicates source code Read calls               │
 ├────────────────────────────────────────────────────┤
-│  TIER 2 — WARM  (~/.claude/projects/*/memory/)     │
-│  Claude Code auto-memory, project-local            │
+│  LAYER 3 — SUBAGENTS  (Haiku, on-demand)           │
+│  memberberry: vault retrieval via CLI               │
+│  blackbox: checkpoint capture via CLI               │
 ├────────────────────────────────────────────────────┤
-│  TIER 1 — HOT   (context window + working/)        │
-│  Current session, ephemeral                        │
+│  LAYER 2 — SESSION START  (CLI-driven, injected)    │
+│  Git state, open tasks, project status, working/   │
+├────────────────────────────────────────────────────┤
+│  LAYER 1 — CLAUDE.MD  (~500 tokens, every turn)     │
+│  Static: architecture, conventions, structure       │
 └────────────────────────────────────────────────────┘
 
 Hooks: SessionStart → PreCompact → Stop
+Subagents: memberberry (retrieval) → blackbox (checkpoint)
 Staging: ~/.claude/memory-staging/<slug>/
 Commands: /memory-init  /memory-load  /memory-sync
 ```
@@ -54,7 +59,7 @@ Data flows upward. Hooks enforce the lifecycle deterministically. The agent hand
 
 ## Core Principles
 
-1. **Hooks handle detection, you handle MCP** — SessionStart injects the project slug and flags pending items. You read/write Obsidian via MCP in response.
+1. **Hooks detect, subagents retrieve, MCP writes** — SessionStart injects the project slug and dynamic state via CLI. Delegate vault reads to memberberry (Haiku). Write to Obsidian via MCP.
 2. **Project slug drives routing** — all session paths use `sessions/by-project/<slug>/`. The slug comes from hook context or `.claude/CLAUDE.md` metadata.
 3. **Log meaningful sessions** — not every interaction, only significant ones.
 4. **Propose learnings** — never write to `learnings/` without the user's approval.
@@ -70,7 +75,7 @@ Three hooks fire automatically. Know what they do so you can respond appropriate
 | Hook | Fires When | What It Injects | Your Job |
 |------|-----------|-----------------|----------|
 | **SessionStart** | Session begins | Project slug, pending checkpoints, init status | Process any pending staging files. Search Obsidian for prior context if task is non-trivial. |
-| **PreCompact** | Before compaction | Path to checkpoint staging file | Fill in the staging file with actual session state (decisions, progress, open items) before compaction completes. After compaction, push to `working/`. |
+| **PreCompact** | Before compaction | Path to checkpoint staging file, clears read-once cache | Delegate to **blackbox** subagent for checkpoint capture. blackbox distils decisions, progress, and open items to the vault. |
 | **Stop** | Each response | Nudge if session is long (15+ messages, 45+ min) | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
 
 ### Staging Directory
@@ -104,11 +109,11 @@ Hooks write to `~/.claude/memory-staging/<slug>/` because they can't call MCP. Y
 **How:**
 ```
 1. Use the project slug from hook context
-2. search_notes(query="<slug>", searchContent=true)
-   - Search in: 5 Agent Memory/sessions/by-project/<slug>/
-   - Also search: 5 Agent Memory/learnings/
-3. For cross-project context: read_note("5 Agent Memory/project-index.md")
-4. Summarise what's relevant — don't dump everything
+2. Delegate to memberberry subagent:
+   "Use memberberry to find prior context for <slug>"
+3. memberberry searches via CLI: search → search:context → property:read → selective read
+4. Main agent receives filtered summary (~200 tokens)
+5. If memberberry unavailable, fall back to MCP search_notes
 ```
 
 **Or:** the user runs `/memory-load` which does this automatically.
@@ -285,27 +290,46 @@ If the user runs these commands, follow their instructions. If the user doesn't 
 
 ## Token Efficiency
 
-- Use `get_frontmatter` before `read_note` when scanning multiple files
-- Use `get_notes_info` for metadata without content
-- Use `search_notes` with specific queries rather than reading everything
+The v3 architecture optimises tokens at every layer:
+
+- **CLAUDE.md** — static only, ~500 tokens per turn (vs ~1500+ in v2)
+- **SessionStart** — CLI snapshot, ~200-300 tokens once (vs MCP dump)
+- **memberberry** — Haiku retrieval, main model gets ~200 token summary
+- **blackbox** — Haiku checkpoint, no main model context cost
+- **read-once** — blocks redundant source code reads, ~2000 tokens saved per prevented re-read
+
+**Rules:**
+- Never call MCP `search_notes` or `read_note` directly — delegate to memberberry
+- Never manually fill checkpoint stubs — delegate to blackbox
+- Use `property:read` over `read` when you only need frontmatter
 - Keep session summaries concise — details go in linked files
-- Only load project-index.md when cross-project context is needed
 
 ---
 
-## MCP Tools Reference
+## Tools Reference
+
+### Obsidian CLI (reads — via subagents)
+
+| Command | Use For |
+|---------|---------|
+| `search` | Find notes by content (paths only) |
+| `search:context` | Matching lines with context |
+| `property:read` | Read frontmatter fields |
+| `read` | Full note content (last resort) |
+| `backlinks` / `links` | Graph traversal |
+| `tasks` | Task queries (requires file path, not folder) |
+| `create` / `append` | Note creation |
+| `property:set` | Set frontmatter values |
+
+### MCP-Obsidian (writes)
 
 | Tool | Use For |
 |------|---------|
-| `read_note` | Load full note content |
 | `write_note` | Create/update notes |
-| `search_notes` | Find relevant memory |
-| `get_frontmatter` | Quick metadata scan |
-| `list_directory` | Browse memory folders |
+| `patch_note` | Update part of a note |
 | `update_frontmatter` | Modify metadata only |
-| `patch_note` | Update part of a note efficiently |
-| `read_multiple_notes` | Batch read (max 10) |
-| `get_notes_info` | Metadata without full content |
+| `move_note` | Move/rename notes |
+| `manage_tags` | Tag operations |
 
 ---
 
