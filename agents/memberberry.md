@@ -89,11 +89,24 @@ ${OBSIDIAN_CLI_PATH:-obsidian} search query="<slug>" path="5 Agent Memory/learni
 
 If any results are found, read them and include in output.
 
+## Error Handling
+
+If any CLI step returns an error (non-zero exit, stderr output),
+report the exact error to the calling agent. Do NOT silently skip
+failed steps or treat error output as search results.
+
+The 2-note limit in Step 5 does not apply to corrections. Always
+read corrections if they exist, even if you have already read 2 notes.
+
 ## Fallback
 
-If the Obsidian CLI is unavailable (errors on any command), report
-this to the calling agent and suggest falling back to MCP
-search_notes directly.
+If the CLI binary is not found (command not found error), immediately
+report to the calling agent: "Obsidian CLI not available. Use MCP
+search_notes directly." Do not attempt further CLI commands.
+
+If a specific CLI command fails but the binary exists, report the
+exact error and the step that failed. Continue with remaining steps
+if they do not depend on the failed step's output.
 
 ## Output Format
 

@@ -81,6 +81,13 @@ status: pending
 would let a fresh agent pick this up cold>
 ```
 
+## Merge Strategy
+
+When merging with an existing checkpoint:
+- Current session state takes precedence over prior checkpoint state
+- Mark superseded decisions as "[superseded]" rather than deleting them
+- Preserve the original checkpoint's `created` date; add a `last_updated` field
+
 ## Important
 
 - Be concise. This checkpoint will be read by a retrieval agent
@@ -89,10 +96,24 @@ would let a fresh agent pick this up cold>
   decisions are what matter for resumption.
 - If the provided context is large, focus on the most recent
   state — that is where the current work lives.
+- The slug must contain only lowercase alphanumeric characters
+  and hyphens. Sanitise if needed before using in paths.
+
+## Write Verification
+
+After writing, verify the checkpoint was saved:
+```bash
+${OBSIDIAN_CLI_PATH:-obsidian} read path="5 Agent Memory/working/<slug>-checkpoint-<YYYY-MM-DD>.md"
+```
+If verification fails, fall back to local staging AND report
+the failure to the calling agent.
 
 ## Fallback
 
-If CLI is unavailable, write the checkpoint content to:
-`~/.claude/memory-staging/<slug>/checkpoint-<YYYY-MM-DD>.md`
-using standard file write. The main agent's SessionStart hook
-will detect it next session.
+If CLI is unavailable:
+1. Report to the calling agent: "Obsidian CLI unavailable. Checkpoint
+   written to local staging only — NOT synced to Obsidian vault."
+2. Write the checkpoint to:
+   `~/.claude/memory-staging/<slug>/checkpoint-<YYYY-MM-DD>.md`
+3. The calling agent should inform the user that the checkpoint is
+   local-only and needs manual sync.

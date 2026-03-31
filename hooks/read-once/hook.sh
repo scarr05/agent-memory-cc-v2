@@ -19,9 +19,21 @@ DISABLED="${READ_ONCE_DISABLED:-0}"
 # Exit immediately if disabled
 [[ "$DISABLED" == "1" ]] && exit 0
 
+# Dependency check — jq is required for JSON parsing and output
+if ! command -v jq &>/dev/null; then
+    echo '{"decision":"allow","reason":"read-once: jq is not installed. Install jq to enable redundant read prevention."}'
+    exit 0
+fi
+
+# Validate numeric config
+if ! [[ "$TTL" =~ ^[0-9]+$ ]] || ! [[ "$DIFF_MAX" =~ ^[0-9]+$ ]]; then
+    echo '{"decision":"allow","reason":"read-once: TTL or DIFF_MAX is not a valid number. Check READ_ONCE_TTL and READ_ONCE_DIFF_MAX."}'
+    exit 0
+fi
+
 # --- Cache setup ---
 CACHE_DIR="$HOME/.claude/read-once/cache"
-SESSION_ID="${CLAUDE_SESSION_ID:-$$}"
+SESSION_ID=$(echo "${CLAUDE_SESSION_ID:-$$}" | tr -cd 'A-Za-z0-9_-')
 SESSION_CACHE="$CACHE_DIR/$SESSION_ID"
 mkdir -p "$SESSION_CACHE"
 
@@ -47,8 +59,19 @@ fi
 
 # --- Cache key ---
 # Use base64 of file path as cache filename to handle special chars
-CACHE_KEY=$(echo -n "$FILE_PATH" | base64 -w 0 2>/dev/null || echo -n "$FILE_PATH" | base64 2>/dev/null)
+CACHE_KEY=$(echo -n "$FILE_PATH" | base64 -w 0 2>/dev/null || echo -n "$FILE_PATH" | base64 2>/dev/null | tr -d '\n')
+if [[ -z "$CACHE_KEY" ]]; then
+    exit 0  # Cannot create cache key — allow read
+fi
 CACHE_FILE="$SESSION_CACHE/$CACHE_KEY"
+
+# --- Helper: atomic cache write ---
+write_cache() {
+    local mtime="$1"
+    local timestamp="$2"
+    printf '%s\n%s\n' "$mtime" "$timestamp" > "$CACHE_FILE.tmp"
+    mv "$CACHE_FILE.tmp" "$CACHE_FILE"
+}
 
 # --- Get current file state ---
 if [[ ! -f "$FILE_PATH" ]]; then
@@ -56,7 +79,10 @@ if [[ ! -f "$FILE_PATH" ]]; then
     exit 0
 fi
 
-CURRENT_MTIME=$(stat -c %Y "$FILE_PATH" 2>/dev/null || stat -f %m "$FILE_PATH" 2>/dev/null || echo "0")
+CURRENT_MTIME=$(stat -c %Y "$FILE_PATH" 2>/dev/null || stat -f %m "$FILE_PATH" 2>/dev/null || true)
+if [[ -z "$CURRENT_MTIME" ]]; then
+    exit 0  # Cannot determine mtime — allow read without caching
+fi
 
 # --- Check cache ---
 if [[ -f "$CACHE_FILE" ]]; then
@@ -64,12 +90,16 @@ if [[ -f "$CACHE_FILE" ]]; then
     CACHED_TIME=$(sed -n '2p' "$CACHE_FILE")
     NOW=$(date +%s)
 
+    # Guard against empty cached values
+    if [[ -z "$CACHED_MTIME" ]] || [[ -z "$CACHED_TIME" ]]; then
+        write_cache "$CURRENT_MTIME" "$NOW"
+        exit 0
+    fi
+
     # Check TTL expiry
     ELAPSED=$((NOW - CACHED_TIME))
     if [[ "$ELAPSED" -ge "$TTL" ]]; then
-        # Cache expired — allow read and update cache
-        echo "$CURRENT_MTIME" > "$CACHE_FILE"
-        echo "$NOW" >> "$CACHE_FILE"
+        write_cache "$CURRENT_MTIME" "$NOW"
         exit 0
     fi
 
@@ -78,52 +108,38 @@ if [[ -f "$CACHE_FILE" ]]; then
         MINS_AGO=$((ELAPSED / 60))
 
         if [[ "$MODE" == "deny" ]]; then
-            cat << HOOKJSON
-{
-  "decision": "block",
-  "reason": "read-once: already in context (read ${MINS_AGO}m ago, unchanged). File: $FILE_PATH"
-}
-HOOKJSON
+            jq -n --arg path "$FILE_PATH" --argjson mins "$MINS_AGO" \
+                '{decision: "block", reason: ("read-once: already in context (read " + ($mins | tostring) + "m ago, unchanged). File: " + $path)}'
             exit 0
         else
-            # Warn mode — allow but advise
-            cat << HOOKJSON
-{
-  "decision": "allow",
-  "reason": "read-once: this file was already read ${MINS_AGO}m ago and hasn't changed. It should still be in your context. File: $FILE_PATH"
-}
-HOOKJSON
+            jq -n --arg path "$FILE_PATH" --argjson mins "$MINS_AGO" \
+                '{decision: "allow", reason: ("read-once: this file was already read " + ($mins | tostring) + "m ago and hasn'\''t changed. It should still be in your context. File: " + $path)}'
             exit 0
         fi
     fi
 
     # File changed since last read
     if [[ "$DIFF_ENABLED" == "1" ]]; then
-        # Try to show diff only
-        # We need the cached content — re-read and diff
-        DIFF_OUTPUT=$(diff <(cat "$CACHE_FILE.content" 2>/dev/null || echo "") <(cat "$FILE_PATH") 2>/dev/null || true)
-        DIFF_LINES=$(echo "$DIFF_OUTPUT" | wc -l)
+        # Check that cached content exists before attempting diff
+        if [[ -f "$CACHE_FILE.content" ]]; then
+            DIFF_OUTPUT=$(diff "$CACHE_FILE.content" "$FILE_PATH" 2>/dev/null || true)
+            DIFF_LINES=$(echo "$DIFF_OUTPUT" | wc -l)
 
-        if [[ "$DIFF_LINES" -gt 0 ]] && [[ "$DIFF_LINES" -le "$DIFF_MAX" ]]; then
-            # Update cache
-            echo "$CURRENT_MTIME" > "$CACHE_FILE"
-            echo "$(date +%s)" >> "$CACHE_FILE"
-            cp "$FILE_PATH" "$CACHE_FILE.content" 2>/dev/null || true
+            if [[ "$DIFF_LINES" -gt 0 ]] && [[ "$DIFF_LINES" -le "$DIFF_MAX" ]]; then
+                write_cache "$CURRENT_MTIME" "$(date +%s)"
+                cp "$FILE_PATH" "$CACHE_FILE.content" 2>/dev/null || true
 
-            cat << HOOKJSON
-{
-  "decision": "allow",
-  "reason": "read-once: file changed since last read (${DIFF_LINES} lines differ). Diff:\\n$(echo "$DIFF_OUTPUT" | head -"$DIFF_MAX" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' ' ')"
-}
-HOOKJSON
-            exit 0
+                TRIMMED_DIFF=$(echo "$DIFF_OUTPUT" | head -"$DIFF_MAX")
+                jq -n --arg lines "$DIFF_LINES" --arg diff "$TRIMMED_DIFF" \
+                    '{decision: "allow", reason: ("read-once: file changed since last read (" + $lines + " lines differ). Diff:\n" + $diff)}'
+                exit 0
+            fi
         fi
-        # Diff too large — fall through to full re-read
+        # No cached content or diff too large — fall through to full re-read
     fi
 
     # Update cache and allow full re-read
-    echo "$CURRENT_MTIME" > "$CACHE_FILE"
-    echo "$(date +%s)" >> "$CACHE_FILE"
+    write_cache "$CURRENT_MTIME" "$(date +%s)"
     if [[ "$DIFF_ENABLED" == "1" ]]; then
         cp "$FILE_PATH" "$CACHE_FILE.content" 2>/dev/null || true
     fi
@@ -131,8 +147,7 @@ HOOKJSON
 fi
 
 # --- First read: cache and allow ---
-echo "$CURRENT_MTIME" > "$CACHE_FILE"
-echo "$(date +%s)" >> "$CACHE_FILE"
+write_cache "$CURRENT_MTIME" "$(date +%s)"
 if [[ "$DIFF_ENABLED" == "1" ]]; then
     cp "$FILE_PATH" "$CACHE_FILE.content" 2>/dev/null || true
 fi
