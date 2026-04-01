@@ -239,3 +239,44 @@ else
     echo "  Metrics: ${STOP_MS}ms"
 fi
 echo ""
+
+# --- Summary ---
+TOTAL=$((PASS_COUNT + FAIL_COUNT))
+OVERALL="PASS"
+if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    OVERALL="FAIL"
+fi
+
+echo "=== Summary: $PASS_COUNT/$TOTAL passed — $OVERALL ==="
+echo ""
+
+# --- Append to results file ---
+mkdir -p "$RESULTS_DIR"
+
+# Write header if file doesn't exist
+if [[ ! -f "$RESULTS_FILE" ]]; then
+    cat > "$RESULTS_FILE" << 'EOF'
+# Baseline Results
+
+## Tier 1 — Hook Validation
+
+| Project | Slug | SS chars | SS ms | PC stub bytes | PC ms | Stop ms | Result |
+|---------|------|----------|-------|---------------|-------|---------|--------|
+EOF
+fi
+
+# Append row
+SS_CHARS="${SS_CHARS:-0}"
+SS_MS="${SS_MS:-0}"
+CP_SIZE="${CP_SIZE:-0}"
+PC_MS="${PC_MS:-0}"
+STOP_MS="${STOP_MS:-0}"
+
+echo "| $PROJECT_NAME | ${SS_DETECTED_SLUG:-unknown} | $SS_CHARS | $SS_MS | $CP_SIZE | $PC_MS | $STOP_MS | $OVERALL |" >> "$RESULTS_FILE"
+
+echo "Results appended to: $RESULTS_FILE"
+
+# Exit with failure code if any test failed
+if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+fi
