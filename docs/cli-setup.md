@@ -28,17 +28,35 @@ obsidian version
 
 ### Windows (Git Bash / WSL / Claude Code)
 
-Git Bash and WSL may not inherit the Windows PATH. Add manually:
+Git Bash does not resolve `.com` extensions the way CMD/PowerShell do, so `obsidian` won't find `Obsidian.com` even when its directory is on PATH. Two fixes — use both for best coverage:
+
+**1. Symlink (makes `obsidian` work in all bash sessions):**
 
 ```bash
-# Add to ~/.bashrc or ~/.bash_profile
-export PATH="/c/Program Files/Obsidian:$PATH"
+ln -s "/c/Program Files/Obsidian/Obsidian.com" ~/.local/bin/obsidian
 ```
 
-Then restart your shell and test:
+> **Note:** On NTFS without developer mode / admin elevation, `ln -s` creates a file copy rather than a true symlink. The copy won't update when Obsidian does — re-run the command after Obsidian updates, or rely on the env var below.
+
+**2. `OBSIDIAN_CLI_PATH` env var (reliable for hooks):**
+
+Add to `~/.claude/settings.json` under `"env"`:
+
+```json
+{
+  "env": {
+    "OBSIDIAN_CLI_PATH": "/c/Program Files/Obsidian/Obsidian.com"
+  }
+}
+```
+
+All hooks use `OBS="${OBSIDIAN_CLI_PATH:-obsidian}"` and will pick this up regardless of PATH state.
+
+**Verify:**
 
 ```bash
 obsidian version
+# Expected: 1.12.x (installer 1.12.x)
 ```
 
 ### macOS

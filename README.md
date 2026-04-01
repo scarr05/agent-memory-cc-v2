@@ -152,6 +152,17 @@ Deep consolidation that mines recent session transcripts (JSONL files) for decis
 
 The stop hook checks a 24-hour timer and the session-start hook nudges when dream consolidation is due. `--ingest` and `--tidy` are now aliases for dream phases 3 and 4.
 
+## Troubleshooting
+
+### `obsidian: command not found` in Claude Code (Windows)
+
+Git Bash doesn't resolve `.com` extensions, so `obsidian` won't find `Obsidian.com` even when its directory is on PATH. Fix with both:
+
+1. **Symlink:** `ln -s "/c/Program Files/Obsidian/Obsidian.com" ~/.local/bin/obsidian`
+2. **Env var** in `~/.claude/settings.json`: `"OBSIDIAN_CLI_PATH": "/c/Program Files/Obsidian/Obsidian.com"`
+
+See [docs/cli-setup.md](docs/cli-setup.md) for full details.
+
 ## Related Documentation
 
 - [docs/hooks-architecture.md](docs/hooks-architecture.md) — System design document explaining the hook-MCP bridge pattern, detection logic, and interaction flows
