@@ -235,7 +235,11 @@ if [[ "$CLI_OK" == "true" ]]; then
     WORKING=$("$OBS" search query="$SLUG" path="5 Agent Memory/working" format=json 2>/dev/null || echo "")
     if [[ -n "$WORKING" ]] && [[ "$WORKING" != "[]" ]]; then
         CONTEXT+="### Working Files\\n"
-        CONTEXT+="$(echo "$WORKING" | jq -r '.[]' 2>/dev/null | head -5 | sed 's/^/- /')\\n\\n"
+        WORKING_LIST=$(echo "$WORKING" | jq -r '.[]' 2>/dev/null | head -5 | sed 's/^/- /' || true)
+        if [[ -n "$WORKING_LIST" ]]; then
+            CONTEXT+="$WORKING_LIST\\n"
+        fi
+        CONTEXT+="\\n"
     fi
 
     # Corrections flag

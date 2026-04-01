@@ -95,7 +95,7 @@ else
     fi
 
     # Check: slug detection (extract from systemMessage)
-    SS_DETECTED_SLUG=$(echo "$SS_MSG" | grep -oP 'Project slug: `\K[^`]+' || true)
+    SS_DETECTED_SLUG=$(echo "$SS_MSG" | grep -o 'Project: `[^`]*`' | head -1 | sed 's/Project: `//;s/`.*//' || true)
     if [[ -n "$SS_DETECTED_SLUG" ]]; then
         pass "Slug detected: $SS_DETECTED_SLUG"
         if [[ -n "$EXPECTED_SLUG" ]] && [[ "$SS_DETECTED_SLUG" != "$EXPECTED_SLUG" ]]; then
