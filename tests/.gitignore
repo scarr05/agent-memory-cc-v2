@@ -1,0 +1,4 @@
+# Results contain project-specific paths and vault data
+results/*.md
+results/*.log
+!results/.gitkeep
