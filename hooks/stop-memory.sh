@@ -8,15 +8,25 @@ set -euo pipefail
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
 
-# Fast slug detection (minimal checks for performance)
-detect_slug_fast() {
-    if [[ -f "$CLAUDE_MD" ]]; then
-        grep -oP '(?<=memory:project-slug=)[^\s-]+[a-z0-9-]*' "$CLAUDE_MD" 2>/dev/null && return 0
-    fi
-    basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
-}
+# Fast slug detection: state file first, then minimal fallback
+STATE_FILE=".claude/memory-state.json"
+SLUG=""
 
-SLUG=$(detect_slug_fast)
+# Try state file first (fastest, most reliable)
+if [[ -f "$STATE_FILE" ]]; then
+    SLUG=$(jq -r '.slug // empty' "$STATE_FILE" 2>/dev/null || true)
+fi
+
+# Fallback: minimal detection
+if [[ -z "$SLUG" ]]; then
+    if [[ -f "$CLAUDE_MD" ]]; then
+        SLUG=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1)
+    fi
+fi
+
+if [[ -z "$SLUG" ]]; then
+    SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+fi
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 META_FILE="$PROJECT_DIR/.session-meta"
 
@@ -34,7 +44,8 @@ EOF
 fi
 
 # Increment message count
-CURRENT_COUNT=$(grep -oP '(?<=message_count=)\d+' "$META_FILE" 2>/dev/null || echo "0")
+CURRENT_COUNT=$(sed -n 's/.*message_count=\([0-9]*\).*/\1/p' "$META_FILE" 2>/dev/null | head -1)
+CURRENT_COUNT="${CURRENT_COUNT:-0}"
 NEW_COUNT=$((CURRENT_COUNT + 1))
 sed -i "s/message_count=$CURRENT_COUNT/message_count=$NEW_COUNT/" "$META_FILE"
 
@@ -46,11 +57,12 @@ else
 fi
 
 # Check session duration
-SESSION_START=$(grep -oP '(?<=session_start=).*' "$META_FILE" 2>/dev/null || echo "")
+SESSION_START=$(sed -n 's/.*session_start=\(.*\)/\1/p' "$META_FILE" 2>/dev/null | head -1)
+SESSION_START="${SESSION_START:-}"
 DURATION_MINS=0
+NOW_EPOCH=$(date +%s)
 if [[ -n "$SESSION_START" ]]; then
     START_EPOCH=$(date -d "$SESSION_START" +%s 2>/dev/null || echo "0")
-    NOW_EPOCH=$(date +%s)
     if [[ "$START_EPOCH" -gt 0 ]]; then
         DURATION_MINS=$(( (NOW_EPOCH - START_EPOCH) / 60 ))
     fi
@@ -67,6 +79,20 @@ fi
 if [[ "$DURATION_MINS" -ge 45 ]] && ! grep -q 'duration_nudge_sent=true' "$META_FILE" 2>/dev/null; then
     NUDGE="This session has been running for ${DURATION_MINS} minutes with $NEW_COUNT exchanges. Consider running /memory-sync before context gets too large."
     echo "duration_nudge_sent=true" >> "$META_FILE"
+fi
+
+# --- Dream timer check ---
+# Uses NOW_EPOCH set above
+LAST_DREAM_FILE="$PROJECT_DIR/.last-dream"
+if [[ -f "$LAST_DREAM_FILE" ]]; then
+    read -r LAST_DREAM < "$LAST_DREAM_FILE" || LAST_DREAM=0
+    HOURS_SINCE_DREAM=$(( (NOW_EPOCH - LAST_DREAM) / 3600 ))
+    if [[ "$HOURS_SINCE_DREAM" -ge 24 ]]; then
+        touch "$PROJECT_DIR/.dream-pending"
+    fi
+elif [[ "$NEW_COUNT" -ge 5 ]]; then
+    # First-ever use: only flag after enough session activity
+    touch "$PROJECT_DIR/.dream-pending"
 fi
 
 # Output nudge if significant

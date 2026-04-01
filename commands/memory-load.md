@@ -23,9 +23,59 @@ If $ARGUMENTS is provided, use it as the search topic. Otherwise, infer from:
 
 ## Steps
 
+### 0. Restore Memory Context
+
+Before loading Obsidian context, restore the hook-level context that SessionStart normally provides.
+
+#### 0.1 Read State File
+
+```bash
+cat .claude/memory-state.json 2>/dev/null || echo "NOT FOUND"
+```
+
+If the state file exists, use its values:
+- `slug` → project slug for all subsequent searches
+- `area` → Obsidian area
+- `sessionPath` → where to find sessions
+- `pendingCheckpoints` → files to process
+- `dreamPending` → whether to nudge for dream consolidation
+
+If the state file does NOT exist, fall back to detecting the slug:
+1. Check `.claude/CLAUDE.md` for `<!-- memory:project-slug=X -->`
+2. Check git remote origin
+3. Use directory name
+Warn the user: "State file missing — using auto-detected slug. Consider running `/memory-init` to set up properly."
+
+#### 0.2 Check Pending Checkpoints
+
+```bash
+ls ~/.claude/memory-staging/<slug>/checkpoint-*.md 2>/dev/null
+```
+
+If any exist, list them and remind to process to Obsidian `5 Agent Memory/working/`.
+
+#### 0.3 Check Dream Status
+
+If `dreamPending` is true in the state file (or `~/.claude/memory-staging/<slug>/.dream-pending` exists), note: "Dream consolidation pending — run `/memory-sync --dream` when ready."
+
+#### 0.4 Present Context Block
+
+Output a summary matching the SessionStart format:
+
+```
+## Memory System Active (restored via /memory-load)
+Project slug: `<slug>`
+Area: `<area>`
+Obsidian session path: `<sessionPath>`
+[pending checkpoints if any]
+[dream status if pending]
+```
+
+Then continue with the normal Obsidian context loading below.
+
 ### 1. Identify Context Needed
 
-Determine the project/topic to search for. Be specific — use the project slug rather than vague terms.
+Use the project slug from Step 0. If $ARGUMENTS is provided, use it as an additional search topic alongside the slug.
 
 ### 2. Check Project Index
 

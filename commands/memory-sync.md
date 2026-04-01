@@ -9,6 +9,13 @@ allowed-tools:
   - "obsidian:list_directory"
   - "obsidian:update_frontmatter"
   - "obsidian:patch_note"
+  - "obsidian:read_multiple_notes"
+  - "obsidian:get_notes_info"
+  - "Agent"
+  - "Bash"
+  - "Read"
+  - "Grep"
+  - "Glob"
 ---
 
 # /memory-sync
@@ -19,8 +26,9 @@ Consolidate this session's context into the Obsidian vault. $ARGUMENTS
 
 Parse $ARGUMENTS for mode flags:
 - **(no args)** — Standard session sync (default)
-- **--ingest** — Also pull auto-memory from this project into vault
-- **--tidy** — Review old sessions for staleness and archive candidates
+- **--dream** — Deep consolidation: mine transcripts, cross-reference vault, prune stale sessions (includes --ingest and --tidy)
+- **--ingest** — Pull auto-memory from this project into vault (alias for dream Phase 3)
+- **--tidy** — Review old sessions for staleness and archive candidates (alias for dream Phase 4)
 - **--status** — Show current memory state without writing anything
 
 ## Standard Sync (default)
@@ -91,6 +99,35 @@ source_agent: "claude-code"
 ## Notes for Resumption
 <If resumable: true — include file paths, current state, exact next step. Enough context for a fresh agent to continue.>
 ```
+
+### Step 3.5: Append to Decisions Log
+
+If any decisions were made this session (from the `decisions:` frontmatter array in the session note just written):
+
+1. Check if `_decisions.md` exists in the project folder:
+
+```
+list_directory("5 Agent Memory/sessions/by-project/<project-slug>/")
+```
+
+2. If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders:
+
+```
+write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <content from template>)
+```
+
+3. For each decision in the session's `decisions:` array, append an entry using `patch_note`:
+
+```markdown
+
+### <date> — <Decision Title>
+**Context:** <infer from session context>
+**Decision:** <the decision as stated>
+**Rationale:** <infer from session discussion>
+**Source:** [[<session-note-filename>]]
+```
+
+4. Update the `modified` date in `_decisions.md` frontmatter using `update_frontmatter`.
 
 ### Step 4: Pattern Detection
 
@@ -203,3 +240,224 @@ Show current memory state without writing anything:
 3. Any working/ files still active
 4. Auto-memory file count for current project
 5. Last sync date (from most recent session note)
+
+---
+
+## Dream Mode (--dream)
+
+Deep memory consolidation across all three tiers. Mines recent session transcripts for decisions, corrections, and preferences that were never explicitly logged, then cross-references against the Obsidian vault.
+
+Scope: current project only.
+
+### Dream Phase 1: Orient
+
+Read current state from both tiers to build a baseline of what's already captured.
+
+**Tier 2 — auto-memory:**
+
+```bash
+# Find the auto-memory directory for this project
+ls ~/.claude/projects/*/memory/MEMORY.md 2>/dev/null
+```
+
+If found, read `MEMORY.md` and note existing entries.
+
+**Tier 3 — Obsidian vault (via MCP):**
+
+```
+read_note("5 Agent Memory/project-index.md")
+list_directory("5 Agent Memory/sessions/by-project/<slug>/")
+list_directory("5 Agent Memory/learnings/")
+```
+
+If `_decisions.md` exists, read it:
+
+```
+read_note("5 Agent Memory/sessions/by-project/<slug>/_decisions.md")
+```
+
+Read the 2-3 most recent session notes (frontmatter only via `get_frontmatter`) to understand what's already been captured.
+
+Build a mental map: what topics are covered, what decisions are logged, what learnings exist. This is the deduplication baseline — dream only extracts what's genuinely new.
+
+### Dream Phase 2: Gather Signal
+
+Find recent JSONL session transcripts for the current project:
+
+```bash
+find ~/.claude/projects/ -path "*sessions/*.jsonl" -mtime -7 2>/dev/null | sort -r | head -20
+```
+
+**Token-efficient scanning strategy — never read full transcript files:**
+
+1. **Grep first** — use the Grep tool to pattern match against JSONL files. This returns only matching lines with surrounding context, not entire files.
+
+2. **Extract content with jq** — for each matching line, extract just the human-readable content:
+
+```bash
+# Extract user message content from a matching JSONL line
+echo '<matching-line>' | jq -r 'select(.type == "human") | .message.content[] | select(.type == "text") | .text' 2>/dev/null
+```
+
+3. **Read context only for high-confidence hits** — if a grep match looks promising, read 5-10 surrounding lines from the JSONL file to verify the context.
+
+**Signal patterns to grep for:**
+
+| Signal Type | Grep Pattern | Destination |
+|------------|-------------|-------------|
+| Corrections | `actually\|no,\|wrong\|incorrect\|not right\|stop doing\|I meant` | `learnings/corrections/` |
+| Preferences | `I prefer\|always use\|never use\|from now on\|default to\|remember that` | `learnings/preferences/` |
+| Decisions | `let's go with\|I decided\|we're using\|the plan is\|switch to\|we agreed` | `_decisions.md` |
+| Recurring patterns | `again\|every time\|keep forgetting\|as usual\|same as before\|we always` | `learnings/workflow/` |
+
+For each hit, extract:
+- **The fact** — what was said
+- **The date** — from the JSONL file modification time
+- **Confidence** — high (explicit, unambiguous statement), medium (likely but needs context), low (might be noise)
+
+Discard low-confidence hits. Keep medium and high for the consolidation report.
+
+### Dream Phase 3: Consolidate
+
+Cross-reference findings from Phase 2 against the baseline from Phase 1.
+
+#### 3.1 Deduplicate
+
+For each finding, search the vault for existing coverage:
+
+- **Decisions** — search `_decisions.md` for the same topic. If already logged, skip.
+- **Corrections** — search `5 Agent Memory/learnings/corrections/` for the same correction.
+- **Preferences** — search `5 Agent Memory/learnings/preferences/` for the same preference.
+- **Workflow patterns** — search `5 Agent Memory/learnings/workflow/` for the same pattern.
+
+Use `search_notes(query="<key phrase>", searchContent=true)` for each finding.
+
+#### 3.2 Detect Contradictions
+
+If a new finding conflicts with an existing record, flag it:
+
+```markdown
+## Contradictions Found
+
+| Existing | New | Source |
+|----------|-----|--------|
+| "<existing statement>" (<file>, <date>) | "<new statement>" (transcript <date>) | Transcript grep |
+| **Action needed:** Is this a project-specific override or a change in preference? |
+```
+
+Never auto-resolve contradictions. Present them in the dream report for the user to decide.
+
+#### 3.3 Categorise Findings
+
+Route each non-duplicate, non-contradicting finding to its destination:
+
+| Finding type | Destination | Action |
+|-------------|-------------|--------|
+| Decision | `_decisions.md` | Append entry with `source: dream (transcript: <date>)` |
+| Correction | `learnings/corrections/` | Propose as new learning |
+| Preference | `learnings/preferences/` | Propose as new learning |
+| Workflow pattern | `learnings/workflow/` | Propose as new learning |
+
+**All findings go into the approval report first.** Nothing is written until the user approves.
+
+#### 3.4 Auto-Memory Ingest
+
+If auto-memory exists at `~/.claude/projects/<project>/memory/`:
+
+1. Read `MEMORY.md` and any topic files
+2. For each item, search Obsidian for existing coverage (same deduplication as above)
+3. Route genuinely new items:
+   - Preferences/patterns → propose as learnings
+   - Build commands/debug insights → propose for project session notes
+   - Architecture context → propose for project CLAUDE.md
+
+This absorbs the existing `--ingest` behaviour. Running `/memory-sync --ingest` now routes to this phase.
+
+### Dream Phase 4: Prune & Index
+
+#### 4.1 Stale Sessions
+
+Search for sessions older than 90 days:
+
+```
+search_notes(query="status: complete", searchFrontmatter=true)
+```
+
+For each session older than 90 days with `status: complete` and no `promoted_to` field, add to the prune list in the dream report.
+
+This absorbs the existing `--tidy` behaviour. Running `/memory-sync --tidy` now routes to this phase.
+
+#### 4.2 Rebuild Project Index
+
+Read `5 Agent Memory/project-index.md`. For the current project:
+- Update last session date
+- Update session count
+- Update any other stale fields
+
+```
+patch_note("5 Agent Memory/project-index.md", <old row>, <new row>)
+```
+
+#### 4.3 Date Normalisation
+
+Scan recent vault notes (last 30 days of session notes for this project) for relative dates:
+- "yesterday", "today", "last week", "next Monday", etc.
+
+Convert each to an absolute date based on the note's `created` frontmatter date. Use `patch_note` for each replacement.
+
+#### 4.4 Write Dream Timestamp
+
+```bash
+date +%s > ~/.claude/memory-staging/<slug>/.last-dream
+rm -f ~/.claude/memory-staging/<slug>/.dream-pending
+```
+
+This resets the 24-hour timer checked by the Stop hook and clears the per-project pending nudge.
+
+### Dream Report
+
+After all four phases, present the full report for approval:
+
+```markdown
+## Dream Report — <date>
+
+### New Decisions Found (<N>)
+- [ ] <Decision 1> (<date>, <confidence>)
+- [ ] <Decision 2> (<date>, <confidence>)
+
+### New Learnings Proposed (<N>)
+- [ ] Correction: "<correction text>" (<date>)
+- [ ] Preference: "<preference text>" (<date>)
+- [ ] Workflow: "<pattern text>" (<date>)
+
+### Contradictions (<N>)
+<contradiction table from Phase 3.2>
+
+### Auto-Memory Items (<N>)
+- [ ] <item 1> → <proposed destination>
+- [ ] <item 2> → <proposed destination>
+
+### Stale Sessions (<N>)
+- [ ] <session filename> (<date>) — archive?
+
+### Date Corrections (<N>)
+- <file>: "yesterday" → "2026-03-26"
+
+### Stats
+- Transcripts scanned: <N>
+- Findings: <N> (<breakdown by type>)
+- Deduplicated: <N> (already in vault)
+- Contradictions: <N>
+```
+
+The user checks boxes for what to write. For each checked item:
+- **Decisions** → append to `_decisions.md` via `patch_note`
+- **Learnings** → write to appropriate `learnings/<category>/` subfolder via `write_note`
+- **Contradictions** → user states which version to keep; update or remove the stale record
+- **Auto-memory items** → write to stated destination
+- **Stale sessions** → move to archive or delete (as user directs)
+- **Date corrections** → apply via `patch_note`
+
+Unchecked items are discarded.
+
+After writing approved items, update the dream timestamp (Phase 4.4).

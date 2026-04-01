@@ -30,11 +30,13 @@ See [docs/hooks-architecture.md](docs/hooks-architecture.md) for the full design
 ├── commands/
 │   ├── memory-init.md          # One-time project setup and Obsidian folder creation
 │   ├── memory-sync.md          # End-of-session sync to Obsidian vault
-│   └── memory-load.md          # Load prior context from vault for current project
+│   ├── memory-load.md          # Load prior context from vault for current project
+│   └── decision.md             # Ad-hoc decision logging without full session sync
 ├── config/
 │   ├── global-claude-md-v2.md  # Global CLAUDE.md with memory system rules
 │   ├── settings.json           # Hook registration for Claude Code
-│   └── project-claude-md-template.md  # Template for per-project CLAUDE.md
+│   ├── project-claude-md-template.md  # Template for per-project CLAUDE.md
+│   └── decisions-template.md   # Template for per-project _decisions.md
 ├── docs/
 │   ├── hooks-architecture.md   # Full system design document
 │   ├── memory-architecture.md  # Architecture deep-dive and design decisions
@@ -84,9 +86,40 @@ In short: hook scripts from `hooks/` go to `~/.claude/hooks/`, slash commands fr
 1. **SessionStart hook** fires when Claude Code opens a project. It detects the project slug (from CLAUDE.md metadata, git remote, manifest files, or directory name), checks for pending checkpoints, and injects prior context into the conversation.
 2. **Claude searches Obsidian** for prior session notes and learnings relevant to the current project, picking up where previous sessions left off.
 3. **You work normally.** The system stays out of the way during regular development.
-4. **Stop hook** runs after each response, incrementing a message counter. At 15 and 30 messages (or after 45+ minutes), it nudges you to run `/memory-sync`.
+4. **Stop hook** runs after each response, incrementing a message counter. At 15 and 30 messages (or after 45+ minutes), it nudges you to run `/memory-sync`. Also checks a 24-hour dream timer and sets a `.dream-pending` flag when consolidation is due.
 5. **PreCompact hook** fires before context compaction, creating a checkpoint stub so nothing is lost when the context window is trimmed.
-6. **`/memory-sync`** writes a structured session note to the Obsidian vault, proposes learnings, and cleans up staging files.
+6. **`/memory-sync`** writes a structured session note to the Obsidian vault, proposes learnings, appends decisions to the project's `_decisions.md` log, and cleans up staging files.
+
+## New Features
+
+### Decisions Log (`_decisions.md`)
+
+Per-project append-only log of significant decisions in lightweight ADR format. Each entry includes context, rationale, and a source link. Three routes to the log:
+
+- **`/memory-sync`** — automatically extracts decisions from the session note and appends them
+- **`/decision`** — ad-hoc decision logging without a full session sync
+- **`/memory-init`** — backfills decisions from existing session notes on first run
+
+### Codebase Analysis (`/memory-init`)
+
+When initialising a brownfield project (git history detected), `/memory-init` can dispatch three subagents in parallel to analyse the codebase:
+
+- **Structure** — key directories, entry points, module boundaries
+- **Patterns** — naming conventions, error handling, testing approach
+- **History** — areas of churn, trajectory, and inferred decisions from commit messages
+
+Results populate the `## Architecture` section of the project CLAUDE.md. Inferred decisions can be seeded into `_decisions.md` after user confirmation.
+
+### Dream Consolidation (`/memory-sync --dream`)
+
+Deep consolidation that mines recent session transcripts (JSONL files) for decisions, corrections, and preferences that were never explicitly logged. Uses a token-efficient grep-first scanning strategy. Produces an approval report covering:
+
+- New decisions and learnings found in transcripts
+- Contradictions between new findings and existing vault records
+- Stale sessions (90+ days) for archival
+- Auto-memory ingest from Claude Code's built-in memory
+
+The stop hook checks a 24-hour timer and the session-start hook nudges when dream consolidation is due. `--ingest` and `--tidy` are now aliases for dream phases 3 and 4.
 
 ## Related Documentation
 

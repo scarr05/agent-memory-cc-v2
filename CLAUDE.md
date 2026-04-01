@@ -20,16 +20,17 @@ Hooks cannot call MCP directly. They write to local staging files and inject `ad
 
 | Script | Event | Purpose | Target |
 |--------|-------|---------|--------|
-| `session-start.sh` | SessionStart | Detect project slug, flag pending checkpoints, inject context | ~100ms |
+| `session-start.sh` | SessionStart | Detect project slug, flag pending checkpoints, detect dream-pending, inject context | ~100ms |
 | `pre-compact.sh` | PreCompact | Create checkpoint stub before context compaction | ~200ms |
-| `stop-memory.sh` | Stop | Increment message counter, nudge at 15/30 messages or 45+ min | <50ms |
+| `stop-memory.sh` | Stop | Increment message counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | <50ms |
 
 ### Slash Commands
 
 | File | Command | Purpose |
 |------|---------|---------|
-| `memory-init.md` | `/memory-init` | One-time project setup: detect stack, create CLAUDE.md metadata, set up Obsidian folders, load prior context |
-| `memory-sync.md` | `/memory-sync` | End-of-session: write session note, propose learnings, clean staging. Supports `--ingest`, `--tidy`, `--status` flags |
+| `memory-init.md` | `/memory-init` | One-time project setup: detect stack, create CLAUDE.md metadata, set up Obsidian folders, load prior context. Includes decisions log setup (Phase 4.5) and optional codebase analysis (Phase 4.6) |
+| `memory-sync.md` | `/memory-sync` | End-of-session: write session note, append to decisions log, propose learnings, clean staging. Supports `--dream`, `--ingest`, `--tidy`, `--status` flags |
+| `decision.md` | `/decision` | Ad-hoc decision logging to `_decisions.md` without full session sync |
 
 ### Project Slug Detection (priority order)
 
