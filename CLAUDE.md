@@ -85,3 +85,12 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - Memory metadata in project CLAUDE.md files uses HTML comments (`<!-- memory:key=value -->`) for invisibility in rendered markdown
 - Obsidian notes must always include YAML frontmatter
 - British English spelling throughout (organisation, colour, behaviour)
+
+## Testing
+
+Semi-automated test suite in `tests/`:
+- **Tier 1 (scripted):** `bash tests/hook-validation.sh /path/to/project [expected-slug]` — validates hook outputs and captures metrics
+- **Tier 2-3 (manual):** Follow `tests/playbook.md` for session-level testing
+- **Results:** `tests/results/baseline-YYYY-MM-DD.md` (gitignored)
+
+See `docs/superpowers/specs/2026-04-01-e2e-testing-design.md` for the full design.
