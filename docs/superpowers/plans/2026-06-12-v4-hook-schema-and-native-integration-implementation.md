@@ -12,6 +12,23 @@
 
 ---
 
+## Review Findings Applied (2026-06-13)
+
+A multi-agent review verified every bug claim against live code (all confirmed) and mapped the real file-level dependency graph. The following corrections are **binding** and override the original task text where they conflict:
+
+1. **`session-start.sh` is the dominant serial bottleneck** — edited by Tasks 1, 2, 4, 5, 6, 8 (not the 2/5/8/9 the old header implied; Task 9 never touches it). A **single agent must own this file end-to-end in strict numeric order**. Do NOT split these tasks across parallel worktrees — the conflicts are semantic (function-call and field-write contracts), not textual.
+2. **`tests/hook-validation.sh` is the second bottleneck** — edited by Tasks 2, 3, 4, 5, 6, 8, 9, 11. The results-table header/row is collided on by Tasks 5, 8, 9, 11; **Task 11 must run last** and re-derive the final table.
+3. **Hidden contract — Task 2 ⟶ Task 4:** Task 2 must *extract* the output logic into a reusable `emit_context_and_exit` function (not merely swap the JSON), because Task 4's compact/clear branch calls it. This is a hard requirement on Task 2's deliverable shape.
+4. **Hidden contract — Task 6 cross-file:** Task 6 must edit `session-start.sh` to *write* `session_start_epoch` into `.session-meta`, which its `stop-memory.sh` edit then reads. Both files change together in Task 6.
+5. **Tasks 8 and 9 are NOT independent** — they share `config/settings.json` *and* the test results-table region. Run them serially under one owner, after Task 6 freezes `session-start.sh`. (The old "Tasks 7–10 parallelisable" note is wrong; only `{7, 10}` and `{12, 13}` are truly parallel.)
+6. **Nudge `elif` bug (high):** the originally-proposed `if -ge 15 … elif -ge 30 …` is self-defeating — a session that jumps past 15 fires the 15 branch and never reaches 30. **Use two independent `if`s, checking 30 first** (see corrected Task 3 Step 2). Add a seed-29 → assert-30 test.
+7. **Timing assertions are WARN, not hard FAIL:** `Stop ≤50ms` is almost certainly unreachable on Git Bash (empty bash spawn often exceeds 50ms). Tasks 5, 6, 9, 11 record measured times and **fail only on >2× regression against a recorded baseline**, never on an absolute target.
+8. **Doc-injection is the load-bearing gate:** the empirical "what slug did the memory system inject?" check is elevated to a **Task 2 acceptance gate** — if `additionalContext` does not actually inject, stop and escalate. `MEMORY_HOOK_PLAINTEXT` only rescues SessionStart; UserPromptSubmit/PreToolUse have no plaintext fallback, so verify their injection independently (Task 9).
+9. **`CLAUDE_SESSION_ID` scoping (Task 1):** verify it is exported into the PreCompact/PreToolUse hook env (Task 0). When unset, `$$` differs across processes, so the scoped clear no-ops — skip the clear in that case rather than wiping all sessions.
+10. **Vault cache poisoning (Task 5):** key `.vault-cache.json` by **slug + branch**, and **always run the corrections query live** (exclude it from the cache) — a stale corrections fragment silently misses safety-critical overrides.
+
+---
+
 ## CRITICAL: Doc Verification First
 
 Hook output schemas have changed across Claude Code releases, and there is at least one known upstream issue affecting SessionStart `additionalContext` (#16538). Before writing any hook code:
@@ -30,19 +47,20 @@ agent-memory-cc-v2/
 ├── .claude-plugin/plugin.json          # NEW  (Task 12)
 ├── hooks/
 │   ├── hooks.json                      # NEW  (Task 12)
-│   ├── session-start.sh                # REWRITE (Tasks 2, 5, 8, 9)
+│   ├── session-start.sh                # REWRITE (Tasks 1, 2, 4, 5, 6, 8) — dominant serial bottleneck, single-owner only
 │   ├── session-end.sh                  # NEW  (Task 8)
 │   ├── prompt-corrections.sh           # NEW  (Task 9)
-│   ├── pre-compact.sh                  # UPDATE (Task 4)
+│   ├── pre-compact.sh                  # UPDATE (Tasks 1, 4)
 │   ├── stop-memory.sh                  # REWRITE (Tasks 3, 6)
 │   └── read-once/hook.sh               # UPDATE (Task 3)
 ├── agents/memberberry.md               # UPDATE (Task 10)
 ├── agents/blackbox.md                  # UPDATE (Task 10)
-├── commands/*.md                       # UPDATE (Task 7)
-├── config/settings.json                # UPDATE (Tasks 8, 9)
+├── commands/memory-sync.md             # UPDATE (Tasks 1, 7)
+├── commands/{memory-init,memory-load,decision}.md  # UPDATE (Task 1)
+├── config/settings.json                # UPDATE (Tasks 8, 9) — serialise: adjacent JSON keys
 ├── skills/agent-memory/SKILL.md        # UPDATE (Task 13)
 ├── docs/setup-guide-v4.md              # NEW  (Task 13)
-└── tests/hook-validation.sh            # UPDATE (Tasks 2, 3, 4, 6, 8, 9)
+└── tests/hook-validation.sh            # UPDATE (Tasks 2, 3, 4, 5, 6, 8, 9, 11) — shared results-table region, serialise
 ```
 
 ---
@@ -51,32 +69,25 @@ agent-memory-cc-v2/
 
 **Files:** none — git only
 
-- [ ] **Step 1: Confirm v3 state and merge to main**
+> **DECISION (2026-06-13):** Do **not** merge `dev/v3-cli-subagents` into `main` as part of this work. Pushing v3 straight to main would bypass the mandatory PR/`/simplify`/`/security-review` gates. The v3→main merge is deferred to its own PR. v4 is cut from the current v3 HEAD instead (v3 contains all prior work; `dev/v3-cli-subagents..dev/memory-improvements` is empty, confirmed).
+
+- [x] **Step 1: Cut the working branch from v3 and push it** *(done 2026-06-13)*
 
 ```bash
-git checkout main && git pull
-git log --oneline main..dev/v3-cli-subagents
+git checkout -b dev/v4-schema-fixes   # from dev/v3-cli-subagents HEAD
+git push -u origin dev/v4-schema-fixes
 ```
 
-If `dev/v3-cli-subagents` has unmerged work (it does as of 2026-06-12: docs, tests, security fixes), merge it. Check `dev/memory-improvements` is fully contained in v3 (`git log --oneline dev/v3-cli-subagents..dev/memory-improvements` should be empty); if not, merge it first.
+The v4 spec and plan are committed on this branch (commit `f1ea6a5`).
 
-```bash
-git merge dev/v3-cli-subagents
-git push origin main
-```
-
-- [ ] **Step 2: Cut the working branch**
-
-```bash
-git checkout -b dev/v4-schema-fixes
-```
-
-- [ ] **Step 3: Run the doc verification described above and commit the notes file**
+- [ ] **Step 2: Run the doc verification described above and commit the notes file**
 
 ```bash
 git add docs/superpowers/notes/2026-06-12-v4-schema-verification.md
 git commit -m "docs: record verified hook/plugin schema findings for v4"
 ```
+
+Additionally record in the notes: whether `CLAUDE_SESSION_ID` is exported into the PreCompact/PreToolUse hook environment (finding 9), and the exact `mcp__<server>__<tool>` prefix from a live `/mcp` (finding for Task 1).
 
 ---
 
@@ -91,12 +102,17 @@ Replace:
 ```bash
 rm -rf "$HOME/.claude/read-once/cache/" 2>/dev/null || true
 ```
-with:
+with (finding 9 — do NOT fall back to `$$`: pre-compact and the read-once PreToolUse hook are separate processes with different PIDs, so a `$$` fallback targets a non-existent dir and the clear silently no-ops while leaving every other session's cache intact only by accident):
 ```bash
-# Clear read-once cache for THIS session only — other sessions keep theirs
-RO_SESSION=$(echo "${CLAUDE_SESSION_ID:-$$}" | tr -cd 'A-Za-z0-9_-')
-rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true
+# Clear read-once cache for THIS session only — other sessions keep theirs.
+# Requires CLAUDE_SESSION_ID (the same key read-once/hook.sh uses). If it is
+# unset, skip the clear rather than wipe all sessions or target a wrong PID dir.
+if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    RO_SESSION=$(echo "$CLAUDE_SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+    rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true
+fi
 ```
+Task 0 must confirm `CLAUDE_SESSION_ID` is actually exported into the PreCompact hook environment; if it is reliably set this scoping is correct. Add a test that seeds two session cache dirs and asserts only the matching one is removed.
 
 - [ ] **Step 2: Stop `memory-state.json` dirtying git status**
 
@@ -157,6 +173,8 @@ fi
 
 Adjust field names if the Task 0 verification notes differ.
 
+**Finding 3 (hard requirement):** wrap this output logic in a function — `emit_context_and_exit()` — that both the full path and Task 4's compact/clear branch call. Task 2's deliverable is the *function*, not just the swapped JSON, because Task 4 calls it. Define it once; do not inline the output in two places.
+
 - [ ] **Step 2: Update the Tier 1 assertions**
 
 In `tests/hook-validation.sh`, the session-start section: replace the `systemMessage` extraction with:
@@ -172,6 +190,10 @@ bash tests/hook-validation.sh "$(pwd)" memory-architecture || true
 git add hooks/session-start.sh tests/hook-validation.sh
 git commit -m "fix: SessionStart emits additionalContext instead of systemMessage"
 ```
+
+- [ ] **Step 4: ACCEPTANCE GATE — confirm injection actually lands (finding 8)**
+
+Tier 1 only proves the hook *emits* `additionalContext`; it cannot prove Claude *receives* it (upstream bug #16538). In a live session, ask: **"what project slug did the memory system inject?"** If Claude cannot see it, the JSON form is not landing — set `MEMORY_HOOK_PLAINTEXT=1` and re-test. **Do not proceed to Tasks 4–13 until one of the two forms verifiably injects** — every downstream task assumes the injection channel works. Record the working form (JSON vs plaintext) and the CC version in the Task 0 notes.
 
 ---
 
@@ -203,18 +225,21 @@ fi
 
 - [ ] **Step 2: Fix nudge thresholds to survive missed fires**
 
-Replace the `-eq 15` / `-eq 30` checks with `-ge` plus sent-flags in `.session-meta`, mirroring the existing `duration_nudge_sent` pattern:
+Replace the `-eq 15` / `-eq 30` checks with `-ge` plus sent-flags in `.session-meta`, mirroring the existing `duration_nudge_sent` pattern. **Check 30 BEFORE 15, using independent guards — NOT an elif chain starting at 15.**
 
 ```bash
-if [[ "$NEW_COUNT" -ge 15 ]] && ! grep -q 'nudge15_sent=true' "$META_FILE" 2>/dev/null; then
-    NUDGE="This session has $NEW_COUNT exchanges (~${DURATION_MINS}min). Consider running /memory-sync to checkpoint progress to Obsidian."
-    echo "nudge15_sent=true" >> "$META_FILE"
-elif [[ "$NEW_COUNT" -ge 30 ]] && ! grep -q 'nudge30_sent=true' "$META_FILE" 2>/dev/null; then
+# Highest threshold first. A session that jumps PAST 15 (a missed fire — the
+# exact case -ge exists to survive) must still fire the 30 nudge. An
+# `if -ge 15 … elif -ge 30` would fire the 15 branch and never reach 30.
+if [[ "$NEW_COUNT" -ge 30 ]] && ! grep -q 'nudge30_sent=true' "$META_FILE" 2>/dev/null; then
     NUDGE="This session has $NEW_COUNT exchanges (~${DURATION_MINS}min). Consider running /memory-sync to checkpoint progress to Obsidian."
     echo "nudge30_sent=true" >> "$META_FILE"
+elif [[ "$NEW_COUNT" -ge 15 ]] && ! grep -q 'nudge15_sent=true' "$META_FILE" 2>/dev/null; then
+    NUDGE="This session has $NEW_COUNT exchanges (~${DURATION_MINS}min). Consider running /memory-sync to checkpoint progress to Obsidian."
+    echo "nudge15_sent=true" >> "$META_FILE"
 fi
 ```
-(Note: check 30 before 15 OR use the elif order above with care — at count 30+, `nudge15_sent` will already be true, so the elif correctly reaches the 30 branch. Trace it; add a comment.)
+(`elif` is correct here *because 30 is checked first*: at count ≥30 the first branch fires; at 15–29 it falls through to the second. Set `nudge30_sent` should also imply `nudge15_sent` is moot — once 30 fires, the 15 nudge is no longer wanted.)
 
 - [ ] **Step 3: Fix read-once PreToolUse schema**
 
@@ -229,7 +254,7 @@ jq -n --arg reason "..." \
 - [ ] **Step 4: Add read-once schema tests and update Stop tests**
 
 In `tests/hook-validation.sh`:
-- Stop section: assert no output below thresholds (existing); add a seeded test — write `message_count=14` into a temp `.session-meta`, fire the hook, assert output contains `systemMessage` and meta gains `nudge15_sent=true`. Restore meta afterwards.
+- Stop section: assert no output below thresholds (existing); add a seeded test — write `message_count=14` into a temp `.session-meta`, fire the hook, assert output contains `systemMessage` and meta gains `nudge15_sent=true`. **Add the missed-fire test (finding 6):** seed `message_count=29` with NO `nudge15_sent` flag, fire once, assert `nudge30_sent=true` and the nudge fired — this is the case the elif ordering must survive and the seed-14 test does not cover. Restore meta afterwards.
 - New read-once section: pipe a synthetic PreToolUse JSON (`{"tool_name":"Read","tool_input":{"file_path":"<this script>"}}`) twice; second response must contain `.hookSpecificOutput.permissionDecision == "allow"` with a reason in warn mode. With `READ_ONCE_MODE=deny`, second response must be `"deny"`. Clean the cache dir before and after.
 
 - [ ] **Step 5: Run, commit**
@@ -296,7 +321,9 @@ git commit -m "feat: move compaction checkpoint handoff to SessionStart source=c
 
 - [ ] **Step 1: Add the vault-state cache**
 
-Before the CLI block: if `$PROJECT_DIR/.vault-cache.json` exists and is younger than 15 minutes (mtime check via `find -mmin -15`), read the five pre-rendered context fragments from it and skip all CLI calls. After a cold run, write the fragments to the cache atomically (`.tmp` + `mv`).
+Before the CLI block: if the cache exists and is younger than 15 minutes (mtime check via `find -mmin -15`), read the pre-rendered context fragments from it and skip the cached CLI calls. After a cold run, write the fragments to the cache atomically (`.tmp` + `mv`).
+
+**Finding 10 — cache scoping:** key the cache by **slug + branch**, e.g. `.vault-cache-$(git branch --show-current 2>/dev/null || echo nobranch).json`, so a concurrent session on another branch of the same repo does not read this branch's working files/tasks. **Exclude corrections from the cache entirely** — always run the corrections query live (one CLI call) and refresh `.corrections-index` on every start. A stale corrections fragment silently misses safety-critical overrides, which the system treats as the highest-stakes fragment.
 
 - [ ] **Step 2: Parallelise the cold path**
 
@@ -304,7 +331,7 @@ Run the five CLI queries (index row, open tasks, working files, corrections, ses
 
 - [ ] **Step 3: Timing tests**
 
-Tier 1 session-start section: run the hook twice; record both timings in the metrics line (`cold Xms / warm Yms`). Assert warm ≤ 300ms. Assert cold ≤ 3000ms when the CLI is available (skip the cold assertion with a SKIP note when `obsidian version` fails). Add the two timing columns to the results table row.
+Tier 1 session-start section: run the hook twice; record both timings in the metrics line (`cold Xms / warm Yms`). **WARN (not FAIL) when warm >300ms or cold >3000ms; FAIL only on >2× recorded baseline (finding 7).** Skip the cold check with a SKIP note when `obsidian version` fails (the CLI may be unavailable on the runner). Add the two timing columns to the results table row.
 
 - [ ] **Step 4: Run, verify timings, commit**
 
@@ -326,18 +353,18 @@ git commit -m "perf: parallel CLI queries with 15min vault cache and 3s budget i
 
 - Slug from state file: `sed -n 's/.*"slug": *"\([^"]*\)".*/\1/p' "$STATE_FILE"` instead of jq.
 - Replace the multiple sed/grep/append passes over `.session-meta` with ONE awk invocation that increments `message_count`, updates/adds `last_activity`, and prints the new count — write to `.tmp` and `mv`.
-- Drop the `date -d` duration parse if it costs a process: store `session_start_epoch=$(date +%s)` in `.session-meta` at SessionStart and subtract directly.
+- Drop the `date -d` duration parse if it costs a process: store `session_start_epoch=$(date +%s)` in `.session-meta` at SessionStart and subtract directly. **Finding 4 (cross-file contract):** this requires editing `session-start.sh` to WRITE `session_start_epoch` into `.session-meta` — both files change in this task. If only `stop-memory.sh` is edited, the duration calc reads a field that was never written. The single-awk consolidation here must also subsume the `nudge15_sent`/`nudge30_sent` flag writes Task 3 added, so author this with Task 3's `-ge`/sent-flag logic already present (hard ordering dependency: Task 3 before Task 6).
 
 - [ ] **Step 2: Move the dream-timer check to SessionStart**
 
 Delete the `.last-dream` / `.dream-pending` block from `stop-memory.sh` entirely. In `session-start.sh` (full path only), add the equivalent check: if `.last-dream` is older than 24h → touch `.dream-pending` (the surfacing logic already exists there). Keep the first-ever-use rule: in SessionStart, flag dream-pending if no `.last-dream` exists AND prior session meta shows `message_count >= 5`.
 
-- [ ] **Step 3: Verify the ≤ 50ms target now passes**
+- [ ] **Step 3: Measure the Stop hot path (WARN, not hard FAIL — finding 7)**
 
 ```bash
 bash tests/hook-validation.sh "$(pwd)" memory-architecture
 ```
-The existing Stop timing assertion (≤ 50ms) must PASS. If still over on Git Bash (process spawn cost on Windows is real), reduce to: state-file read + single awk + conditional printf, nothing else, and re-measure. Document the final measured time in the results file.
+`≤50ms` on Git Bash is almost certainly unreachable (an empty `bash -c exit 0` often exceeds it on Windows; each binary spawn is ~10–30ms). So the harness **records** the measured Stop time and **WARNs** if over 50ms, but only **FAILs on >2× the recorded baseline** (regression guard). First measure the empty-bash-spawn floor on the target box and note it in the results file as the real lower bound. Still minimise spawns — state-file read + single awk + conditional printf, nothing else — and document the final measured time.
 
 - [ ] **Step 4: Commit**
 
@@ -424,7 +451,7 @@ Budget <100ms — no jq on the happy path, no CLI calls:
 ```json
 {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "Correction on record: <titles>. Load details via memberberry before proceeding."}}
 ```
-(Verify field names against Task 0 notes; plain stdout is also documented as injected for UserPromptSubmit and is an acceptable simpler alternative — choose based on verification.)
+(Verify field names against Task 0 notes; plain stdout is also documented as injected for UserPromptSubmit and is an acceptable simpler alternative — choose based on verification.) **Finding 8:** `MEMORY_HOOK_PLAINTEXT` does NOT cover this hook. If `additionalContext` injection is unreliable for UserPromptSubmit (sibling of #16538), corrections injection silently no-ops — reproducing the exact v3 class of bug. Verify injection independently with a Tier 2 check ("after a corrections hit, does Claude actually see it?"); if unreliable, default this hook to plain stdout from the outset.
 5. No match → exit 0 silently.
 
 - [ ] **Step 2: Register in `config/settings.json`** under UserPromptSubmit.
@@ -573,7 +600,7 @@ Open a PR to main summarising: schema fixes (the headline), compaction redesign,
 
 ## Execution Notes
 
-- **Order is binding for Tasks 0–6** (each builds on the prior). Tasks 7–10 are independent of each other and may be parallelised via subagents; Tasks 11–13 come last.
+- **Order is binding for Tasks 0–6** (each builds on the prior). **Only `{Task 7, Task 10}` and `{Task 12, Task 13}` are truly parallel** (disjoint files). Tasks 8 and 9 are NOT independent (shared `settings.json` + test results table) and Task 8 edits `session-start.sh`, so run 8→9 serially after Task 6. Task 11 is a barrier after 5/8/9. (Corrects the original "Tasks 7–10 parallelisable" claim — see Review Findings 1, 5.)
 - **Windows/Git Bash is the primary platform.** Watch process-spawn costs in hot-path hooks (Stop, UserPromptSubmit) — every external binary call is ~10–30ms there. Measure, don't assume.
 - **LF line endings** on all `.sh` files (CRLF breaks bash). If editing on Windows, verify with `file hooks/*.sh`.
 - **Never leave a task with the harness asserting an old schema.** Hook + test change together, same commit.
