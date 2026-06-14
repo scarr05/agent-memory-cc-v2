@@ -9,6 +9,24 @@ STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
 OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
+# --- Output emitter ---
+# additionalContext is the documented injection channel for SessionStart.
+# MEMORY_HOOK_PLAINTEXT=1 falls back to plain stdout (also documented) in case
+# the upstream additionalContext bug (#16538) is still live for this CC version.
+# Takes the context string as an explicit argument so callers cannot emit a
+# half-built payload — the full path and this script's compact/clear branch
+# (Task 4) both call it the same way, with their context fully assembled.
+emit_context_and_exit() {
+    local ctx="$1"
+    if [[ "${MEMORY_HOOK_PLAINTEXT:-0}" == "1" ]]; then
+        echo -e "$ctx"
+    else
+        jq -n --arg ctx "$(echo -e "$ctx")" \
+            '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $ctx}}'
+    fi
+    exit 0
+}
+
 # --- Project slug detection (unchanged from v2) ---
 
 detect_slug() {
@@ -145,6 +163,15 @@ cat > "$STATE_FILE" << STATEJSON
   "lastUpdated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 STATEJSON
+
+# Keep memory-state.json out of git status without touching tracked .gitignore
+GIT_DIR_PATH=$(git rev-parse --git-dir 2>/dev/null || true)
+if [[ -n "$GIT_DIR_PATH" ]]; then
+    EXCLUDE_FILE="$GIT_DIR_PATH/info/exclude"
+    if ! grep -q 'memory-state.json' "$EXCLUDE_FILE" 2>/dev/null; then
+        echo ".claude/memory-state.json" >> "$EXCLUDE_FILE" 2>/dev/null || true
+    fi
+fi
 
 # Check for pending checkpoints
 PENDING_CHECKPOINTS=()
@@ -288,4 +315,4 @@ CONTEXT+="→ For checkpoint capture: delegate to **blackbox** subagent.\\n"
 CONTEXT+="→ Do NOT call MCP search_notes or read vault notes directly.\\n"
 
 # --- Output ---
-jq -n --arg msg "$(echo -e "$CONTEXT")" '{"systemMessage": $msg}'
+emit_context_and_exit "$CONTEXT"

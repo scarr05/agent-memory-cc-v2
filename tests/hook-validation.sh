@@ -86,15 +86,15 @@ else
         fail "Output is not valid JSON: $(echo "$SS_OUTPUT" | head -c 200)"
     fi
 
-    # Check: systemMessage key exists
-    SS_MSG=$(echo "$SS_OUTPUT" | jq -r '.systemMessage // empty' 2>/dev/null || true)
+    # Check: hookSpecificOutput.additionalContext key exists
+    SS_MSG=$(echo "$SS_OUTPUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
     if [[ -n "$SS_MSG" ]]; then
-        pass "systemMessage key present"
+        pass "hookSpecificOutput.additionalContext present"
     else
-        fail "systemMessage key missing from output"
+        fail "hookSpecificOutput.additionalContext missing from output"
     fi
 
-    # Check: slug detection (extract from systemMessage)
+    # Check: slug detection (extract from additionalContext)
     SS_DETECTED_SLUG=$(echo "$SS_MSG" | grep -o 'Project: `[^`]*`' | head -1 | sed 's/Project: `//;s/`.*//' || true)
     if [[ -n "$SS_DETECTED_SLUG" ]]; then
         pass "Slug detected: $SS_DETECTED_SLUG"
@@ -102,7 +102,7 @@ else
             fail "Slug mismatch: got '$SS_DETECTED_SLUG', expected '$EXPECTED_SLUG'"
         fi
     else
-        fail "Could not extract slug from systemMessage"
+        fail "Could not extract slug from additionalContext"
     fi
 
     # Check: no errors on stderr
@@ -237,6 +237,110 @@ else
     fi
 
     echo "  Metrics: ${STOP_MS}ms"
+
+    # --- Seeded nudge tests (schema + threshold behaviour) ---
+    # These mutate $META_FILE, so snapshot and restore it afterwards.
+    META_BACKUP=""
+    if [[ -f "$META_FILE" ]]; then
+        META_BACKUP=$(cat "$META_FILE")
+    fi
+
+    seed_meta() {
+        # seed_meta <count> [extra-line...]
+        local count="$1"; shift
+        mkdir -p "$STOP_STAGING"
+        {
+            echo "session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "message_count=$count"
+            echo "project_slug=$STAGING_SLUG"
+            echo "area="
+            for extra in "$@"; do echo "$extra"; done
+        } > "$META_FILE"
+    }
+
+    # Seed 14 -> hook increments to 15 -> systemMessage nudge + nudge15_sent=true
+    seed_meta 14
+    SEED15_OUTPUT=$(echo '{}' | bash "$STOP_HOOK" 2>/dev/null || true)
+    SEED15_MSG=$(echo "$SEED15_OUTPUT" | jq -r '.systemMessage // empty' 2>/dev/null || true)
+    if [[ -n "$SEED15_MSG" ]]; then
+        pass "Seed-15: systemMessage nudge emitted"
+    else
+        fail "Seed-15: expected systemMessage nudge, got: $(echo "$SEED15_OUTPUT" | head -c 200)"
+    fi
+    if grep -q 'nudge15_sent=true' "$META_FILE" 2>/dev/null; then
+        pass "Seed-15: nudge15_sent=true recorded"
+    else
+        fail "Seed-15: nudge15_sent flag not recorded in meta"
+    fi
+
+    # Missed-fire (finding 6): seed 29 with NO nudge15_sent -> hook increments to
+    # 30 -> must fire the 30 nudge (elif checks 30 first) and set nudge30_sent.
+    seed_meta 29
+    SEED30_OUTPUT=$(echo '{}' | bash "$STOP_HOOK" 2>/dev/null || true)
+    SEED30_MSG=$(echo "$SEED30_OUTPUT" | jq -r '.systemMessage // empty' 2>/dev/null || true)
+    if [[ -n "$SEED30_MSG" ]]; then
+        pass "Seed-30 (missed fire): systemMessage nudge emitted"
+    else
+        fail "Seed-30 (missed fire): expected systemMessage nudge, got: $(echo "$SEED30_OUTPUT" | head -c 200)"
+    fi
+    if grep -q 'nudge30_sent=true' "$META_FILE" 2>/dev/null; then
+        pass "Seed-30 (missed fire): nudge30_sent=true recorded"
+    else
+        fail "Seed-30 (missed fire): nudge30_sent flag not recorded in meta"
+    fi
+
+    # Restore original meta
+    if [[ -n "$META_BACKUP" ]]; then
+        printf '%s\n' "$META_BACKUP" > "$META_FILE"
+    else
+        rm -f "$META_FILE"
+    fi
+fi
+echo ""
+
+# --- Test: read-once/hook.sh ---
+echo "--- read-once/hook.sh ---"
+
+RO_HOOK="$HOOKS_DIR/read-once/hook.sh"
+if [[ ! -f "$RO_HOOK" ]]; then
+    fail "read-once/hook.sh not found at $RO_HOOK"
+else
+    RO_CACHE_DIR="$HOME/.claude/read-once/cache"
+    # Clean cache before: the second read must hit a cache seeded by the first.
+    rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
+
+    # Synthetic PreToolUse input pointing at this script (a stable, existing
+    # file). Use an absolute path so the hook's existence check resolves
+    # regardless of the hook's working directory.
+    RO_TARGET="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+    RO_INPUT="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$RO_TARGET\"}}"
+    # Fixed session id so both reads share one cache dir
+    export CLAUDE_SESSION_ID="hookval-readonce-test"
+
+    # warn mode (default): first read primes cache, second read warns with allow
+    RO_FIRST=$(echo "$RO_INPUT" | READ_ONCE_MODE=warn bash "$RO_HOOK" 2>/dev/null || true)
+    RO_SECOND=$(echo "$RO_INPUT" | READ_ONCE_MODE=warn bash "$RO_HOOK" 2>/dev/null || true)
+    RO_WARN_DECISION=$(echo "$RO_SECOND" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true)
+    if [[ "$RO_WARN_DECISION" == "allow" ]]; then
+        pass "Read-once warn: second read -> permissionDecision allow"
+    else
+        fail "Read-once warn: expected allow, got '$RO_WARN_DECISION' ($(echo "$RO_SECOND" | head -c 200))"
+    fi
+
+    # deny mode: reset cache, prime, second read denies
+    rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
+    RO_D_FIRST=$(echo "$RO_INPUT" | READ_ONCE_MODE=deny bash "$RO_HOOK" 2>/dev/null || true)
+    RO_D_SECOND=$(echo "$RO_INPUT" | READ_ONCE_MODE=deny bash "$RO_HOOK" 2>/dev/null || true)
+    RO_DENY_DECISION=$(echo "$RO_D_SECOND" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true)
+    if [[ "$RO_DENY_DECISION" == "deny" ]]; then
+        pass "Read-once deny: second read -> permissionDecision deny"
+    else
+        fail "Read-once deny: expected deny, got '$RO_DENY_DECISION' ($(echo "$RO_D_SECOND" | head -c 200))"
+    fi
+
+    # Clean cache after and unset the test session id
+    rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
+    unset CLAUDE_SESSION_ID
 fi
 echo ""
 

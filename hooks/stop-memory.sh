@@ -69,11 +69,22 @@ if [[ -n "$SESSION_START" ]]; then
 fi
 
 # Significance check — nudge at thresholds
-# Only nudge once per threshold to avoid nagging
+# Only nudge once per threshold to avoid nagging. Use -ge plus sent-flags so a
+# session that jumps PAST a threshold (a missed fire) still nudges.
 NUDGE=""
 
-if [[ "$NEW_COUNT" -eq 15 ]] || [[ "$NEW_COUNT" -eq 30 ]]; then
-    NUDGE="This session has $NEW_COUNT exchanges (~${DURATION_MINS}min). Consider running /memory-sync to checkpoint progress to Obsidian."
+# Both thresholds emit the same message; only the sent-flag differs. Set it once.
+NUDGE_MSG="This session has $NEW_COUNT exchanges (~${DURATION_MINS}min). Consider running /memory-sync to checkpoint progress to Obsidian."
+
+# Highest threshold first. A session that jumps PAST 15 (a missed fire — the
+# exact case -ge exists to survive) must still fire the 30 nudge. An
+# `if -ge 15 … elif -ge 30` would fire the 15 branch and never reach 30.
+if [[ "$NEW_COUNT" -ge 30 ]] && ! grep -q 'nudge30_sent=true' "$META_FILE" 2>/dev/null; then
+    NUDGE="$NUDGE_MSG"
+    echo "nudge30_sent=true" >> "$META_FILE"
+elif [[ "$NEW_COUNT" -ge 15 ]] && ! grep -q 'nudge15_sent=true' "$META_FILE" 2>/dev/null; then
+    NUDGE="$NUDGE_MSG"
+    echo "nudge15_sent=true" >> "$META_FILE"
 fi
 
 if [[ "$DURATION_MINS" -ge 45 ]] && ! grep -q 'duration_nudge_sent=true' "$META_FILE" 2>/dev/null; then
@@ -95,13 +106,11 @@ elif [[ "$NEW_COUNT" -ge 5 ]]; then
     touch "$PROJECT_DIR/.dream-pending"
 fi
 
-# Output nudge if significant
+# Output nudge if significant.
+# systemMessage = user-visible nudge. Never block the agent for a reminder.
+# ($NUDGE contains no quotes/backslashes by construction; keep it that way.)
 if [[ -n "$NUDGE" ]]; then
-    cat << HOOKJSON
-{
-  "reason": "$NUDGE"
-}
-HOOKJSON
+    printf '{"systemMessage": "%s"}\n' "$NUDGE"
 fi
 
 # Always exit 0 — never block on Stop

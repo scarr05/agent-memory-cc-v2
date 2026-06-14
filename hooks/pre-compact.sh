@@ -5,8 +5,13 @@
 
 set -euo pipefail
 
-# Clear read-once cache — prevents stale state after compaction
-rm -rf "$HOME/.claude/read-once/cache/" 2>/dev/null || true
+# Clear read-once cache for THIS session only — other sessions keep theirs.
+# Requires CLAUDE_SESSION_ID (the same key read-once/hook.sh uses). If it is
+# unset, skip the clear rather than wipe all sessions or target a wrong PID dir.
+if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    RO_SESSION=$(echo "$CLAUDE_SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+    rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true
+fi
 
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
