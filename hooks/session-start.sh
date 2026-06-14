@@ -438,8 +438,16 @@ if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
     CONTEXT+="💤 **Dream consolidation pending.** Run \`/memory-sync --dream\` when ready.\\n\\n"
 fi
 
-# Prior session info (PRIOR_COUNT captured before the meta reset above)
-if [[ "$PRIOR_COUNT" -gt 10 ]]; then
+# Previous-session sync status. The SessionEnd hook writes .unsynced when a
+# session of real length ended without /memory-sync — a deterministic signal
+# that supersedes the message-count heuristic below. Fall back to the heuristic
+# only when the flag is absent. /memory-sync owns removing .unsynced (PRIOR_COUNT
+# was captured before the meta reset above).
+if [[ -f "$PROJECT_DIR/.unsynced" ]]; then
+    UNSYNCED_MSGS=$(sed -n 's/^messages=\([0-9]*\).*/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
+    UNSYNCED_ENDED=$(sed -n 's/^ended=\(.*\)/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
+    CONTEXT+="⚠ **Previous session (${UNSYNCED_MSGS:-?} msgs, ended ${UNSYNCED_ENDED:-unknown}) was never synced.** Run \`/memory-sync\`, or check the pending checkpoints above.\\n\\n"
+elif [[ "$PRIOR_COUNT" -gt 10 ]]; then
     CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced (\`/memory-sync --status\`).\\n\\n"
 fi
 

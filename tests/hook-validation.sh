@@ -7,7 +7,9 @@ set -euo pipefail
 # --- Args ---
 PROJECT_DIR="${1:?Usage: hook-validation.sh /path/to/project [expected-slug]}"
 EXPECTED_SLUG="${2:-}"
-HOOKS_DIR="$HOME/.claude/hooks"
+# Defaults to the deployed hooks; override (HOOKS_DIR=./hooks) to test repo hooks
+# before deploying them to ~/.claude/hooks.
+HOOKS_DIR="${HOOKS_DIR:-$HOME/.claude/hooks}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESULTS_DIR="$SCRIPT_DIR/results"
 TODAY=$(date +%Y-%m-%d)
@@ -367,6 +369,172 @@ else
         printf '%s\n' "$META_BACKUP" > "$META_FILE"
     else
         rm -f "$META_FILE"
+    fi
+fi
+echo ""
+
+# --- Test: session-end.sh ---
+echo "--- session-end.sh ---"
+
+SE_HOOK="$HOOKS_DIR/session-end.sh"
+SE_MS=0
+if [[ ! -f "$SE_HOOK" ]]; then
+    fail "session-end.sh not found at $SE_HOOK"
+else
+    STAGING_SLUG="${SS_DETECTED_SLUG:-$PROJECT_NAME}"
+    SE_STAGING="$HOME/.claude/memory-staging/$STAGING_SLUG"
+    SE_META="$SE_STAGING/.session-meta"
+    SE_FLAG="$SE_STAGING/.unsynced"
+    mkdir -p "$SE_STAGING"
+
+    # Snapshot meta + any existing flag so the test leaves no residue.
+    SE_META_BACKUP=""
+    [[ -f "$SE_META" ]] && SE_META_BACKUP=$(cat "$SE_META")
+    SE_FLAG_BACKUP=""
+    [[ -f "$SE_FLAG" ]] && SE_FLAG_BACKUP=$(cat "$SE_FLAG")
+
+    se_seed_meta() {
+        # se_seed_meta <count> [extra-line...]
+        local count="$1"; shift
+        {
+            echo "session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "message_count=$count"
+            echo "project_slug=$STAGING_SLUG"
+            echo "area="
+            for extra in "$@"; do echo "$extra"; done
+        } > "$SE_META"
+    }
+
+    # Case 1: count=12, not synced, normal end -> .unsynced with both keys.
+    rm -f "$SE_FLAG"
+    se_seed_meta 12
+    SE_START=$(date +%s%N 2>/dev/null || echo "0")
+    echo '{"reason":"other"}' | bash "$SE_HOOK" 2>/dev/null || true
+    SE_END=$(date +%s%N 2>/dev/null || echo "0")
+    if [[ "$SE_START" != "0" ]] && [[ "$SE_END" != "0" ]]; then
+        SE_MS=$(( (SE_END - SE_START) / 1000000 ))
+    fi
+    if [[ -f "$SE_FLAG" ]] && grep -q '^ended=' "$SE_FLAG" && grep -q '^messages=12' "$SE_FLAG"; then
+        pass "Unsynced flag written with ended + messages=12"
+    else
+        fail "Expected .unsynced with ended+messages=12, got: $(cat "$SE_FLAG" 2>/dev/null | head -c 200)"
+    fi
+
+    # Case 2: synced=true present -> no flag.
+    rm -f "$SE_FLAG"
+    se_seed_meta 12 "synced=true"
+    echo '{"reason":"other"}' | bash "$SE_HOOK" 2>/dev/null || true
+    if [[ ! -f "$SE_FLAG" ]]; then
+        pass "Synced session leaves no unsynced flag"
+    else
+        fail "Synced session should not write .unsynced"
+    fi
+
+    # Case 3: reason=clear -> no flag even when long + unsynced.
+    rm -f "$SE_FLAG"
+    se_seed_meta 12
+    echo '{"reason":"clear"}' | bash "$SE_HOOK" 2>/dev/null || true
+    if [[ ! -f "$SE_FLAG" ]]; then
+        pass "reason=clear skips the unsynced flag"
+    else
+        fail "reason=clear should not write .unsynced"
+    fi
+
+    # Case 4: below threshold (count=9) -> no flag.
+    rm -f "$SE_FLAG"
+    se_seed_meta 9
+    echo '{"reason":"other"}' | bash "$SE_HOOK" 2>/dev/null || true
+    if [[ ! -f "$SE_FLAG" ]]; then
+        pass "Short session (<10 msgs) leaves no unsynced flag"
+    else
+        fail "Short session should not write .unsynced"
+    fi
+
+    # Timing — WARN only, budget 100ms.
+    if [[ "$SE_MS" -le 100 ]]; then
+        pass "SessionEnd ${SE_MS}ms within 100ms budget"
+    else
+        warn "SessionEnd ${SE_MS}ms over 100ms budget"
+    fi
+
+    echo "  Metrics: ${SE_MS}ms"
+
+    # Restore meta + flag.
+    rm -f "$SE_FLAG"
+    [[ -n "$SE_FLAG_BACKUP" ]] && printf '%s\n' "$SE_FLAG_BACKUP" > "$SE_FLAG"
+    if [[ -n "$SE_META_BACKUP" ]]; then
+        printf '%s\n' "$SE_META_BACKUP" > "$SE_META"
+    else
+        rm -f "$SE_META"
+    fi
+fi
+echo ""
+
+# --- Test: prompt-corrections.sh (UserPromptSubmit) ---
+echo "--- prompt-corrections.sh ---"
+
+UPS_HOOK="$HOOKS_DIR/prompt-corrections.sh"
+UPS_MS=0
+if [[ ! -f "$UPS_HOOK" ]]; then
+    fail "prompt-corrections.sh not found at $UPS_HOOK"
+else
+    STAGING_SLUG="${SS_DETECTED_SLUG:-$PROJECT_NAME}"
+    UPS_STAGING="$HOME/.claude/memory-staging/$STAGING_SLUG"
+    UPS_INDEX="$UPS_STAGING/.corrections-index"
+    mkdir -p "$UPS_STAGING"
+
+    # Snapshot any real index so the test leaves no residue.
+    UPS_INDEX_BACKUP=""
+    [[ -f "$UPS_INDEX" ]] && UPS_INDEX_BACKUP=$(cat "$UPS_INDEX")
+
+    # Seed a known correction (title|key; key is lowercased, space-separated).
+    printf '%s\n' "Widget Caching|widget caching" > "$UPS_INDEX"
+
+    # Match: prompt mentions the key -> additionalContext surfaced.
+    UPS_START=$(date +%s%N 2>/dev/null || echo "0")
+    UPS_HIT=$(echo '{"prompt":"how does widget caching work here?"}' | bash "$UPS_HOOK" 2>/dev/null || true)
+    UPS_END=$(date +%s%N 2>/dev/null || echo "0")
+    if [[ "$UPS_START" != "0" ]] && [[ "$UPS_END" != "0" ]]; then
+        UPS_MS=$(( (UPS_END - UPS_START) / 1000000 ))
+    fi
+    UPS_CTX=$(echo "$UPS_HIT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
+    if echo "$UPS_CTX" | grep -qi 'Widget Caching'; then
+        pass "Corrections hit: additionalContext surfaced for matching prompt"
+    else
+        fail "Corrections hit: expected additionalContext mentioning the title, got: $(echo "$UPS_HIT" | head -c 200)"
+    fi
+
+    # No match: unrelated prompt -> no output.
+    UPS_MISS=$(echo '{"prompt":"what is the weather today?"}' | bash "$UPS_HOOK" 2>/dev/null || true)
+    if [[ -z "$UPS_MISS" ]]; then
+        pass "No match: hook emits nothing for unrelated prompt"
+    else
+        fail "No match: expected empty output, got: $(echo "$UPS_MISS" | head -c 200)"
+    fi
+
+    # No index: instant clean exit.
+    rm -f "$UPS_INDEX"
+    UPS_NONE=$(echo '{"prompt":"how does widget caching work here?"}' | bash "$UPS_HOOK" 2>/dev/null || true)
+    if [[ -z "$UPS_NONE" ]]; then
+        pass "No index: hook exits cleanly with no output"
+    else
+        fail "No index: expected empty output, got: $(echo "$UPS_NONE" | head -c 200)"
+    fi
+
+    # Timing — WARN only, budget 100ms.
+    if [[ "$UPS_MS" -le 100 ]]; then
+        pass "UserPromptSubmit ${UPS_MS}ms within 100ms budget"
+    else
+        warn "UserPromptSubmit ${UPS_MS}ms over 100ms budget"
+    fi
+
+    echo "  Metrics: ${UPS_MS}ms"
+
+    # Restore any real index.
+    if [[ -n "$UPS_INDEX_BACKUP" ]]; then
+        printf '%s\n' "$UPS_INDEX_BACKUP" > "$UPS_INDEX"
+    else
+        rm -f "$UPS_INDEX"
     fi
 fi
 echo ""
