@@ -3,7 +3,7 @@ name: agent-memory
 description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing staging checkpoints, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires MCP-Obsidian server."
 ---
 
-# Agent Memory v2
+# Agent Memory v4
 
 Persistent memory system stored in your Obsidian vault at `5 Agent Memory/`. Enforced by hooks, organised by project slug, with three tiers of storage.
 
@@ -25,10 +25,10 @@ Persistent memory system stored in your Obsidian vault at `5 Agent Memory/`. Enf
 │  Static: architecture, conventions, structure       │
 └────────────────────────────────────────────────────┘
 
-Hooks: SessionStart → PreCompact → Stop
-Subagents: memberberry (retrieval) → blackbox (checkpoint)
+Hooks: SessionStart · PreToolUse · PreCompact · Stop · SessionEnd · UserPromptSubmit
+Subagents: memberberry (retrieval, memory: user) · blackbox (checkpoint, memory: project)
 Staging: ~/.claude/memory-staging/<slug>/
-Commands: /memory-init  /memory-load  /memory-sync
+Commands: /memory-init  /memory-load  /memory-sync  /decision
 ```
 
 Data flows upward. Hooks enforce the lifecycle deterministically. The agent handles MCP operations that hooks can't.
@@ -70,13 +70,16 @@ Data flows upward. Hooks enforce the lifecycle deterministically. The agent hand
 
 ## Hook Integration
 
-Three hooks fire automatically. Know what they do so you can respond appropriately.
+Six hooks fire automatically. Know what they do so you can respond appropriately.
 
-| Hook | Fires When | What It Injects | Your Job |
-|------|-----------|-----------------|----------|
-| **SessionStart** | Session begins | Project slug, pending checkpoints, init status | Process any pending staging files. Search Obsidian for prior context if task is non-trivial. |
-| **PreCompact** | Before compaction | Path to checkpoint staging file, clears read-once cache | Delegate to **blackbox** subagent for checkpoint capture. blackbox distils decisions, progress, and open items to the vault. |
-| **Stop** | Each response | Nudge if session is long (15+ messages, 45+ min) | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
+| Hook | Fires When | What It Does | Your Job |
+|------|-----------|--------------|----------|
+| **SessionStart** | Session begins (incl. `source=compact`) | Injects slug, pending checkpoints, the unsynced-session flag, and init status via `additionalContext`. On `source=compact`, surfaces the pre-compaction stub. | Process pending staging files. On a compaction restart, delegate to **blackbox** to fill the stub. Search Obsidian for prior context if the task is non-trivial. |
+| **PreToolUse** (Read) | Before a Read | Blocks redundant re-reads (read-once) via `permissionDecision`. | Nothing — it's transparent. |
+| **PreCompact** | Before compaction | Writes a checkpoint stub to staging and clears the read-once cache. Injects nothing — the handoff happens at the next SessionStart. | Nothing at compaction time; the post-compaction SessionStart drives the handoff. |
+| **Stop** | Each response | Nudges via `systemMessage` if the session is long (15/30 messages, 45+ min); checks the 24-hour dream timer. | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
+| **SessionEnd** | Session ends | Writes `.unsynced` if a real-length session ended without `/memory-sync` (skips a deliberate `clear`). Side-effect only. | Nothing — the next SessionStart surfaces it. |
+| **UserPromptSubmit** | Each prompt | If the prompt touches a logged correction's topic, injects a one-line pointer via `additionalContext`. | Load the correction via memberberry before acting on that topic. |
 
 ### Staging Directory
 
@@ -263,13 +266,14 @@ When the user says "continue where we left off" or "resume X":
 
 ## Slash Command Integration
 
-Three slash commands handle the structured workflows. This skill provides the underlying operations they rely on.
+Four slash commands handle the structured workflows. This skill provides the underlying operations they rely on.
 
 | Command | What It Does | When to Suggest |
 |---------|-------------|-----------------|
 | `/memory-init` | Auto-detects project, creates CLAUDE.md metadata, sets up Obsidian structure, loads context | First time in a new project, or SessionStart flags no config |
 | `/memory-load` | Searches Obsidian by slug, presents prior sessions and learnings | Session start for non-trivial work |
-| `/memory-sync` | Writes structured session note, proposes learnings, updates index, cleans staging | End of significant session |
+| `/memory-sync` | Writes structured session note, proposes learnings, appends decisions, marks the session synced, cleans staging | End of significant session |
+| `/decision` | Logs a single decision to `_decisions.md` without a full sync | A decision worth recording mid-session |
 
 If the user runs these commands, follow their instructions. If the user doesn't and the session is significant, suggest `/memory-sync` before ending.
 
@@ -290,7 +294,7 @@ If the user runs these commands, follow their instructions. If the user doesn't 
 
 ## Token Efficiency
 
-The v3 architecture optimises tokens at every layer:
+The architecture optimises tokens at every layer:
 
 - **CLAUDE.md** — static only, ~500 tokens per turn (vs ~1500+ in v2)
 - **SessionStart** — CLI snapshot, ~200-300 tokens once (vs MCP dump)
