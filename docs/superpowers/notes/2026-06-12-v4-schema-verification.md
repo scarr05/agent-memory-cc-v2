@@ -81,9 +81,14 @@ Then confirm `/hooks` lists all six hooks, `/agents` shows memberberry + blackbo
 
 ---
 
-## Outstanding items for live verification (Sam, in-session)
+## Live verification results
 
-1. **#16538 / additionalContext injection** — Task 2 acceptance gate: confirm the slug actually injects; record JSON-vs-plaintext working form + CC version.
-2. **`CLAUDE_SESSION_ID` export** (Review Finding 9) — confirm it is set in the PreCompact/PreToolUse hook env (echo it from a throwaway hook); the scoped read-once clear depends on it.
-3. **`/mcp` server prefix** (Task 1) — confirm the exact `mcp__<server>__<tool>` prefix matches the rename (server must be literally `obsidian`).
-4. **UserPromptSubmit injection** (Finding 8) — verify corrections injection is actually seen by Claude; default to plain stdout if not.
+### Resolved in-session (2026-06-14)
+
+1. **#16538 / additionalContext injection — RESOLVED, GREEN.** With the new hooks deployed to `~/.claude/hooks/` and **no** `MEMORY_HOOK_PLAINTEXT` set, a fresh session was asked "what project slug did the memory system inject?" and correctly returned `memory-architecture`. **The documented JSON `hookSpecificOutput.additionalContext` form verifiably injects on this CC version** — the plaintext fallback is not required. This is the load-bearing Task 2 acceptance gate; Tasks 4–13 are unblocked. (CC version string to be backfilled.)
+3. **`/mcp` server prefix — RESOLVED.** Obsidian MCP server confirmed connected and registered as `obsidian`, so the Task 1 `mcp__obsidian__<tool>` rename in the four command files is correct.
+
+### Still outstanding
+
+2. **`CLAUDE_SESSION_ID` export** (Review Finding 9) — confirm it is set in the PreCompact/PreToolUse hook env (echo it from a throwaway probe); the scoped read-once cache clear depends on it. Non-blocking: when unset, the clear correctly no-ops rather than misbehaving.
+4. **UserPromptSubmit injection** (Finding 8) — verify corrections injection is actually seen by Claude; default to plain stdout if not. Gates Task 9 only.
