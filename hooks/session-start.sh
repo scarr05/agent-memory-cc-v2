@@ -250,10 +250,6 @@ if [[ -f "$CLAUDE_MD" ]] && grep -q 'memory:project-slug=' "$CLAUDE_MD" 2>/dev/n
     HAS_MEMORY_CONFIG="true"
 fi
 
-# --- CLI availability check ---
-CLI_OK="true"
-"$OBS" version > /dev/null 2>&1 || CLI_OK="false"
-
 # --- Build context injection ---
 CONTEXT="## Memory System Active\\n"
 CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n\\n"
@@ -284,23 +280,40 @@ fi
 CONTEXT+="\\n"
 
 # --- CLI-driven vault state (cached + parallelised) ---
+# Cache the non-safety-critical fragments per slug+branch so a warm restart
+# skips four CLI round-trips. Corrections are deliberately NOT cached — a
+# stale corrections fragment could silently drop a safety override — so they
+# always run live below. The cache holds pre-rendered context text, keyed by
+# branch so a concurrent session on another branch does not read this
+# branch's tasks/working files. $BRANCH was already resolved by the Git
+# section above; reuse it instead of spawning `git branch` again.
+# Pure-bash sanitise (no echo|sed spawn — this runs on every start). Matches
+# the slug-clamp idiom used elsewhere in this hook.
+BRANCH_KEY="${BRANCH:-nobranch}"
+BRANCH_KEY="${BRANCH_KEY//[^A-Za-z0-9._-]/-}"
+CACHE_FILE="$PROJECT_DIR/.vault-cache-$BRANCH_KEY.txt"
+VAULT_FRAGMENT=""
+
+# Warm hit: cache younger than 15 minutes. A persisted cache means all four
+# cold queries succeeded within the window (the cold path only writes it when
+# ALL_OK=1), so the CLI was healthy ≤15min ago — no need to re-probe. Read the
+# pre-rendered fragment and skip the ~800ms `obsidian version` spawn entirely.
+if [[ -n "$(find "$CACHE_FILE" -mmin -15 2>/dev/null || true)" ]]; then
+    VAULT_FRAGMENT=$(cat "$CACHE_FILE" 2>/dev/null || true)
+fi
+
+# --- CLI availability check (cold path only) ---
+# The probe gates the expensive cold queries and short-circuits to the
+# unavailable message with ONE failed spawn instead of four when the CLI is
+# absent. On a warm hit there are no cold queries to gate, so the probe is pure
+# ~800ms overhead — skip it and trust the recent cache. Corrections still run
+# live below and fail closed if Obsidian has since been closed.
+CLI_OK="true"
+if [[ -z "$VAULT_FRAGMENT" ]]; then
+    "$OBS" version > /dev/null 2>&1 || CLI_OK="false"
+fi
+
 if [[ "$CLI_OK" == "true" ]]; then
-
-    # Cache the non-safety-critical fragments per slug+branch so a warm restart
-    # skips four CLI round-trips. Corrections are deliberately NOT cached — a
-    # stale corrections fragment could silently drop a safety override — so they
-    # always run live below. The cache holds pre-rendered context text, keyed by
-    # branch so a concurrent session on another branch does not read this
-    # branch's tasks/working files. $BRANCH was already resolved by the Git
-    # section above; reuse it instead of spawning `git branch` again.
-    BRANCH_KEY=$(echo "${BRANCH:-nobranch}" | sed 's/[^A-Za-z0-9._-]/-/g')
-    CACHE_FILE="$PROJECT_DIR/.vault-cache-$BRANCH_KEY.txt"
-    VAULT_FRAGMENT=""
-
-    # Warm hit: cache younger than 15 minutes.
-    if [[ -n "$(find "$CACHE_FILE" -mmin -15 2>/dev/null || true)" ]]; then
-        VAULT_FRAGMENT=$(cat "$CACHE_FILE" 2>/dev/null || true)
-    fi
 
     if [[ -z "$VAULT_FRAGMENT" ]]; then
         # Cold path: run the four cacheable queries in parallel, each to its own

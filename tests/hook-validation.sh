@@ -164,6 +164,77 @@ else
 fi
 echo ""
 
+# --- Test: session-start.sh warm-hit skips the Obsidian probe (CLI-independent) ---
+# Proves the perf change: on a warm cache hit, session-start must NOT spawn
+# `obsidian version` (the ~800ms probe), but MUST still run the live corrections
+# query. A logging stub stands in for $OBS, so this needs no real Obsidian CLI.
+echo "--- session-start.sh (warm-hit probe skip) ---"
+PROBE_SLUG="${SS_DETECTED_SLUG:-$EXPECTED_SLUG}"
+if [[ ! -f "$SS_HOOK" ]] || [[ -z "$PROBE_SLUG" ]]; then
+    echo "  SKIP: no session-start hook or no slug to key the cache"
+else
+    # Replicate the hook's branch-keyed cache path (cwd is the project dir).
+    if git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
+        PROBE_BRANCH=$(git branch --show-current 2>/dev/null || echo "detached")
+    else
+        PROBE_BRANCH="nobranch"
+    fi
+    PROBE_KEY=$(echo "${PROBE_BRANCH:-nobranch}" | sed 's/[^A-Za-z0-9._-]/-/g')
+    PROBE_STAGING="$HOME/.claude/memory-staging/$PROBE_SLUG"
+    PROBE_CACHE="$PROBE_STAGING/.vault-cache-$PROBE_KEY.txt"
+    mkdir -p "$PROBE_STAGING" 2>/dev/null || true
+
+    # Logging stub: records each invocation's args, returns an empty JSON array
+    # for searches and exit 0 for `version`.
+    PROBE_DIR=$(mktemp -d)
+    PROBE_LOG="$PROBE_DIR/calls.log"
+    PROBE_STUB="$PROBE_DIR/obsidian"
+    cat > "$PROBE_STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "$@" >> "$OBS_CALL_LOG"
+case "${1:-}" in
+    version) exit 0 ;;
+    *) echo "[]" ;;
+esac
+exit 0
+STUBEOF
+    chmod +x "$PROBE_STUB"
+
+    # Warm hit: a fresh, non-empty cache. The hook must skip the probe.
+    echo "warm-cache-test-fragment" > "$PROBE_CACHE"
+    : > "$PROBE_LOG"
+    echo '{}' | OBSIDIAN_CLI_PATH="$PROBE_STUB" OBS_CALL_LOG="$PROBE_LOG" \
+        bash "$SS_HOOK" >/dev/null 2>&1 || true
+    if grep -q '^version' "$PROBE_LOG" 2>/dev/null; then
+        fail "Warm hit still spawned the obsidian version probe"
+    else
+        pass "Warm hit skips the obsidian version probe"
+    fi
+    if grep -q 'corrections' "$PROBE_LOG" 2>/dev/null; then
+        pass "Warm hit still runs the live corrections query"
+    else
+        fail "Warm hit dropped the live corrections query"
+    fi
+
+    # Cold control: no cache → the probe MUST run (guards against a trivial
+    # pass where the stub simply never logged `version`).
+    rm -f "$PROBE_STAGING/.vault-cache-"*.txt 2>/dev/null || true
+    : > "$PROBE_LOG"
+    echo '{}' | OBSIDIAN_CLI_PATH="$PROBE_STUB" OBS_CALL_LOG="$PROBE_LOG" \
+        bash "$SS_HOOK" >/dev/null 2>&1 || true
+    if grep -q '^version' "$PROBE_LOG" 2>/dev/null; then
+        pass "Cold start runs the obsidian version probe"
+    else
+        fail "Cold start did not run the obsidian version probe"
+    fi
+
+    # Cleanup: drop the stub and any stub-written cache so the live system never
+    # reads a synthetic fragment (the next real session re-runs cold once).
+    rm -f "$PROBE_STAGING/.vault-cache-"*.txt 2>/dev/null || true
+    rm -rf "$PROBE_DIR" 2>/dev/null || true
+fi
+echo ""
+
 # --- Test: pre-compact.sh ---
 echo "--- pre-compact.sh ---"
 
