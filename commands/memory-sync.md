@@ -171,11 +171,18 @@ Check `~/.claude/memory-staging/<slug>/` for:
 
 1. **Checkpoint files** — if any exist, their content should now be superseded by the session note. Delete them.
 2. **Session meta** — reset `message_count=0` for the next session.
+3. **Synced flag** — record that this session has been synced and clear any stale `.unsynced` marker (see below).
 
 ```bash
 rm -f ~/.claude/memory-staging/<slug>/checkpoint-*.md
 sed -i 's/message_count=[0-9]*/message_count=0/' ~/.claude/memory-staging/<slug>/.session-meta
+
+# Mark synced (SessionEnd reads this) and clear any stale unsynced marker.
+echo "synced=true" >> ~/.claude/memory-staging/<slug>/.session-meta
+rm -f ~/.claude/memory-staging/<slug>/.unsynced
 ```
+
+A fresh SessionStart resets `.session-meta`, so `synced=true` applies only to the current session.
 
 ### Step 7: Confirm
 
