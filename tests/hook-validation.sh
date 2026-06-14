@@ -34,6 +34,13 @@ fail() {
     FAIL_COUNT=$((FAIL_COUNT + 1))
 }
 
+# Timing budgets are advisory (finding 7): a Git Bash spawn floor makes the
+# tightest targets unreachable. warn() reports without counting as a failure;
+# only a >2x regression against the recorded baseline FAILs (see summary).
+warn() {
+    echo "  WARN: $1"
+}
+
 measure_ms() {
     # Runs a command, prints elapsed ms to stdout, output to fd 3
     local start end elapsed
@@ -63,23 +70,44 @@ SS_HOOK="$HOOKS_DIR/session-start.sh"
 if [[ ! -f "$SS_HOOK" ]]; then
     fail "session-start.sh not found at $SS_HOOK"
 else
-    # Capture output and timing
-    SS_OUTPUT=""
-    SS_STDERR=""
+    # Determine CLI availability up front (decides whether the cold-timing
+    # budget check applies, or is skipped).
+    OBS_BIN="${OBSIDIAN_CLI_PATH:-obsidian}"
+    if "$OBS_BIN" version >/dev/null 2>&1; then
+        CLI_AVAIL=1
+    else
+        CLI_AVAIL=0
+    fi
+
+    # Clear the vault cache so run 1 measures the cold path. Cache is keyed by
+    # slug+branch (.vault-cache-<branch>.txt), so glob all of them.
+    if [[ -n "$EXPECTED_SLUG" ]]; then
+        rm -f "$HOME/.claude/memory-staging/$EXPECTED_SLUG/.vault-cache-"*.txt 2>/dev/null || true
+    fi
+
+    # Cold run (cache cleared)
     SS_START=$(date +%s%N 2>/dev/null || echo "0")
     SS_OUTPUT=$(echo '{}' | bash "$SS_HOOK" 2>"$RESULTS_DIR/.ss-stderr-tmp" || true)
     SS_END=$(date +%s%N 2>/dev/null || echo "0")
     SS_STDERR=$(cat "$RESULTS_DIR/.ss-stderr-tmp" 2>/dev/null || true)
     rm -f "$RESULTS_DIR/.ss-stderr-tmp"
-
-    # Timing
     if [[ "$SS_START" != "0" ]] && [[ "$SS_END" != "0" ]]; then
-        SS_MS=$(( (SS_END - SS_START) / 1000000 ))
+        SS_COLD_MS=$(( (SS_END - SS_START) / 1000000 ))
     else
-        SS_MS=0
+        SS_COLD_MS=0
     fi
 
-    # Check: valid JSON
+    # Warm run (cache now primed by the cold run)
+    SS_W_START=$(date +%s%N 2>/dev/null || echo "0")
+    echo '{}' | bash "$SS_HOOK" >/dev/null 2>&1 || true
+    SS_W_END=$(date +%s%N 2>/dev/null || echo "0")
+    if [[ "$SS_W_START" != "0" ]] && [[ "$SS_W_END" != "0" ]]; then
+        SS_WARM_MS=$(( (SS_W_END - SS_W_START) / 1000000 ))
+    else
+        SS_WARM_MS=0
+    fi
+
+    # Check: valid JSON (cold output)
     if echo "$SS_OUTPUT" | jq empty 2>/dev/null; then
         pass "Valid JSON output"
     else
@@ -105,16 +133,32 @@ else
         fail "Could not extract slug from additionalContext"
     fi
 
-    # Check: no errors on stderr
+    # Check: no errors on stderr (cold run)
     if [[ -z "$SS_STDERR" ]]; then
         pass "No stderr output"
     else
         fail "Stderr: $(echo "$SS_STDERR" | head -c 200)"
     fi
 
+    # Timing budgets — WARN only (finding 7); regression FAIL handled in summary.
+    if [[ "$CLI_AVAIL" == "1" ]]; then
+        if [[ "$SS_COLD_MS" -gt 3000 ]]; then
+            warn "Cold SessionStart ${SS_COLD_MS}ms over 3000ms budget"
+        else
+            pass "Cold SessionStart ${SS_COLD_MS}ms within 3000ms budget"
+        fi
+    else
+        echo "  SKIP: cold timing (Obsidian CLI unavailable)"
+    fi
+    if [[ "$SS_WARM_MS" -gt 300 ]]; then
+        warn "Warm SessionStart ${SS_WARM_MS}ms over 300ms budget"
+    else
+        pass "Warm SessionStart ${SS_WARM_MS}ms within 300ms budget"
+    fi
+
     # Metrics
     SS_CHARS=${#SS_MSG}
-    echo "  Metrics: ${SS_CHARS} chars, ${SS_MS}ms"
+    echo "  Metrics: ${SS_CHARS} chars, cold ${SS_COLD_MS}ms / warm ${SS_WARM_MS}ms"
 fi
 echo ""
 
@@ -142,11 +186,12 @@ else
         PC_MS=0
     fi
 
-    # Check: valid JSON output
-    if echo "$PC_OUTPUT" | jq empty 2>/dev/null; then
-        pass "Valid JSON output"
+    # Check: stdout is empty — PreCompact is now a filesystem side-effect only.
+    # The post-compaction handoff is delivered by SessionStart source=compact.
+    if [[ -z "$PC_OUTPUT" ]]; then
+        pass "PreCompact emits no stdout (filesystem side-effect only)"
     else
-        fail "Output is not valid JSON: $(echo "$PC_OUTPUT" | head -c 200)"
+        fail "PreCompact should emit nothing on stdout, got: $(echo "$PC_OUTPUT" | head -c 200)"
     fi
 
     # Check: checkpoint stub created (use ls -t instead of find -printf for Windows compat)
@@ -173,6 +218,32 @@ else
     fi
 
     echo "  Metrics: stub ${CP_SIZE} bytes, ${PC_MS}ms"
+fi
+echo ""
+
+# --- Test: session-start.sh (source=compact) ---
+# Ordered after PreCompact so a checkpoint stub already exists. The compact path
+# must stay slim (skip the ### Git section) and surface the ACTION REQUIRED
+# handoff that points at the pending stub.
+echo "--- session-start.sh (source=compact) ---"
+if [[ -f "$SS_HOOK" ]]; then
+    SSC_OUTPUT=$(echo '{"source":"compact"}' | bash "$SS_HOOK" 2>/dev/null || true)
+    SSC_MSG=$(echo "$SSC_OUTPUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
+    if echo "$SSC_MSG" | grep -q 'post-compact'; then
+        pass "Compact source: slim post-compact context emitted"
+    else
+        fail "Compact source: expected post-compact context, got: $(echo "$SSC_MSG" | head -c 200)"
+    fi
+    if echo "$SSC_MSG" | grep -q '### Git'; then
+        fail "Compact source: Git section present (should be skipped)"
+    else
+        pass "Compact source: Git section skipped"
+    fi
+    if echo "$SSC_MSG" | grep -q 'ACTION REQUIRED'; then
+        pass "Compact source: ACTION REQUIRED handoff present"
+    else
+        fail "Compact source: ACTION REQUIRED handoff missing (a checkpoint stub exists)"
+    fi
 fi
 echo ""
 
@@ -218,11 +289,13 @@ else
         fail "Counter did not increment: before=$COUNT_BEFORE, after=$COUNT_AFTER"
     fi
 
-    # Check: under 50ms target
+    # Check: under 50ms target — WARN only. <=50ms is unreachable on Git Bash
+    # (the empty-bash floor measured below is the real lower bound); a >2x
+    # regression FAIL is enforced in the summary.
     if [[ "$STOP_MS" -le 50 ]]; then
-        pass "Execution time ${STOP_MS}ms (target: <50ms)"
+        pass "Execution time ${STOP_MS}ms (target: <=50ms)"
     else
-        fail "Execution time ${STOP_MS}ms exceeds 50ms target"
+        warn "Execution time ${STOP_MS}ms over 50ms target (Git Bash spawn floor)"
     fi
 
     # Check: output is valid JSON if present (stop hook only outputs on nudge)
@@ -344,6 +417,53 @@ else
 fi
 echo ""
 
+# --- Empty bash spawn floor ---
+# The real lower bound for any hook on this box: an empty `bash -c exit 0`. Stop
+# cannot beat this, so it is the honest reference for the <=50ms target.
+echo "--- timing floor ---"
+FLOOR_START=$(date +%s%N 2>/dev/null || echo "0")
+bash -c 'exit 0'
+FLOOR_END=$(date +%s%N 2>/dev/null || echo "0")
+if [[ "$FLOOR_START" != "0" ]] && [[ "$FLOOR_END" != "0" ]]; then
+    FLOOR_MS=$(( (FLOOR_END - FLOOR_START) / 1000000 ))
+else
+    FLOOR_MS=0
+fi
+echo "  Empty 'bash -c exit 0' floor: ${FLOOR_MS}ms (Stop cannot beat this)"
+echo ""
+
+# --- Timing regression guard (finding 7) ---
+# Budgets are WARN-only inline; here we FAIL only on a >2x regression against the
+# per-machine baseline. Delete results/.timing-baseline to re-baseline.
+SS_COLD_MS="${SS_COLD_MS:-0}"
+SS_WARM_MS="${SS_WARM_MS:-0}"
+STOP_MS="${STOP_MS:-0}"
+BASELINE_FILE="$RESULTS_DIR/.timing-baseline"
+if [[ -f "$BASELINE_FILE" ]]; then
+    BL_SS_COLD=$(sed -n 's/^ss_cold=\([0-9]*\).*/\1/p' "$BASELINE_FILE" | head -1); BL_SS_COLD="${BL_SS_COLD:-0}"
+    BL_SS_WARM=$(sed -n 's/^ss_warm=\([0-9]*\).*/\1/p' "$BASELINE_FILE" | head -1); BL_SS_WARM="${BL_SS_WARM:-0}"
+    BL_STOP=$(sed -n 's/^stop=\([0-9]*\).*/\1/p' "$BASELINE_FILE" | head -1); BL_STOP="${BL_STOP:-0}"
+    if [[ "$BL_SS_COLD" -gt 0 ]] && [[ "$SS_COLD_MS" -gt $(( BL_SS_COLD * 2 )) ]]; then
+        fail "SS cold regression: ${SS_COLD_MS}ms > 2x baseline (${BL_SS_COLD}ms)"
+    fi
+    if [[ "$BL_SS_WARM" -gt 0 ]] && [[ "$SS_WARM_MS" -gt $(( BL_SS_WARM * 2 )) ]]; then
+        fail "SS warm regression: ${SS_WARM_MS}ms > 2x baseline (${BL_SS_WARM}ms)"
+    fi
+    if [[ "$BL_STOP" -gt 0 ]] && [[ "$STOP_MS" -gt $(( BL_STOP * 2 )) ]]; then
+        fail "Stop regression: ${STOP_MS}ms > 2x baseline (${BL_STOP}ms)"
+    fi
+else
+    {
+        echo "ss_cold=$SS_COLD_MS"
+        echo "ss_warm=$SS_WARM_MS"
+        echo "stop=$STOP_MS"
+        echo "floor=$FLOOR_MS"
+        echo "# baseline recorded $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$BASELINE_FILE"
+    echo "Recorded timing baseline: cold ${SS_COLD_MS}ms / warm ${SS_WARM_MS}ms / stop ${STOP_MS}ms (floor ${FLOOR_MS}ms)"
+    echo ""
+fi
+
 # --- Summary ---
 TOTAL=$((PASS_COUNT + FAIL_COUNT))
 OVERALL="PASS"
@@ -364,19 +484,18 @@ if [[ ! -f "$RESULTS_FILE" ]]; then
 
 ## Tier 1 — Hook Validation
 
-| Project | Slug | SS chars | SS ms | PC stub bytes | PC ms | Stop ms | Result |
-|---------|------|----------|-------|---------------|-------|---------|--------|
+| Project | Slug | SS chars | SS cold ms | SS warm ms | PC stub bytes | PC ms | Stop ms | Result |
+|---------|------|----------|------------|------------|---------------|-------|---------|--------|
 EOF
 fi
 
-# Append row
+# Append row (SS_COLD_MS / SS_WARM_MS / STOP_MS already defaulted in the
+# regression-guard block above; default only the rest here)
 SS_CHARS="${SS_CHARS:-0}"
-SS_MS="${SS_MS:-0}"
 CP_SIZE="${CP_SIZE:-0}"
 PC_MS="${PC_MS:-0}"
-STOP_MS="${STOP_MS:-0}"
 
-echo "| $PROJECT_NAME | ${SS_DETECTED_SLUG:-unknown} | $SS_CHARS | $SS_MS | $CP_SIZE | $PC_MS | $STOP_MS | $OVERALL |" >> "$RESULTS_FILE"
+echo "| $PROJECT_NAME | ${SS_DETECTED_SLUG:-unknown} | $SS_CHARS | $SS_COLD_MS | $SS_WARM_MS | $CP_SIZE | $PC_MS | $STOP_MS | $OVERALL |" >> "$RESULTS_FILE"
 
 echo "Results appended to: $RESULTS_FILE"
 

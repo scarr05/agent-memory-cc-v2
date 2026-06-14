@@ -120,31 +120,92 @@ detect_area() {
 
 # --- Main ---
 
+# SessionStart receives JSON on stdin; `source` tells us why the session began
+# (startup | resume | compact | clear). Read it once, early.
+SOURCE=$(cat | jq -r '.source // "startup"' 2>/dev/null || echo "startup")
+
 _DETECTED_VIA=""
 SLUG=$(detect_slug)
+# Defence in depth: detect_slug does not charset-filter the state-file,
+# settings.json, or git-remote branches. Clamp to the slug charset so a crafted
+# slug can never traverse out of the staging dir (it becomes part of rm -rf /
+# mkdir paths) or inject extra key=value args into the Obsidian CLI.
+SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+[[ -z "$SLUG" ]] && SLUG="unknown"
 DETECTED_VIA="$_DETECTED_VIA"
 AREA=$(detect_area)
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 
 # Ensure staging directory exists
-mkdir -p "$PROJECT_DIR"
+[[ -d "$PROJECT_DIR" ]] || mkdir -p "$PROJECT_DIR"
+
+# Gather pending checkpoints once — both the post-compaction fast path and the
+# full path's handoff section use this list.
+PENDING_CHECKPOINTS=()
+while IFS= read -r -d '' file; do
+    PENDING_CHECKPOINTS+=("$file")
+done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
+
+# Capture the prior session's meta BEFORE the full path resets it. PRIOR_COUNT
+# feeds both the dream timer and the "previous session" hint further down.
+PRIOR_SESSION_INFO=""
+if [[ -f "$PROJECT_DIR/.session-meta" ]]; then
+    PRIOR_SESSION_INFO=$(cat "$PROJECT_DIR/.session-meta")
+fi
+PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
+PRIOR_COUNT="${PRIOR_COUNT:-0}"
+
+# --- Fast path: post-compaction / post-clear restart ---
+# Compaction and /clear keep the original on-disk state (slug, state file, meta).
+# These restarts only need slug + checkpoint handoff + delegation guidance, so
+# skip git inspection, all CLI vault queries, the state-file rewrite, and the
+# session-meta reset. Skipping the reset deliberately preserves the prior
+# session_start_epoch and message_count, so Stop's duration/count keep spanning
+# the (still logically continuous) session across the compaction.
+if [[ "$SOURCE" == "compact" ]] || [[ "$SOURCE" == "clear" ]]; then
+    CONTEXT="## Memory System (post-$SOURCE)\\n"
+    CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n"
+    if [[ "$SOURCE" == "compact" ]] && [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
+        CONTEXT+="\\n**ACTION REQUIRED:** Delegate to the blackbox subagent NOW to fill in the pending checkpoint(s) with session state, then continue the interrupted work:\\n"
+        for cp in "${PENDING_CHECKPOINTS[@]}"; do
+            CONTEXT+="- \`$cp\`\\n"
+        done
+    fi
+    CONTEXT+="\\n→ memberberry for prior context, blackbox for checkpoints. No direct MCP vault reads.\\n"
+    emit_context_and_exit "$CONTEXT"
+fi
+
+# ===== Full path (source=startup|resume) =====
+
+# Dream timer (moved here from the Stop hot path). Flag a consolidation if the
+# last dream was >24h ago, or on first-ever use once a prior session showed real
+# activity (message_count >= 5). The surfacing nudge lives further down.
+NOW_EPOCH=$(date +%s)
+LAST_DREAM_FILE="$PROJECT_DIR/.last-dream"
+if [[ -f "$LAST_DREAM_FILE" ]]; then
+    read -r LAST_DREAM < "$LAST_DREAM_FILE" || LAST_DREAM=0
+    LAST_DREAM="${LAST_DREAM:-0}"
+    if [[ $(( (NOW_EPOCH - LAST_DREAM) / 3600 )) -ge 24 ]]; then
+        touch "$PROJECT_DIR/.dream-pending"
+    fi
+elif [[ "$PRIOR_COUNT" -ge 5 ]]; then
+    touch "$PROJECT_DIR/.dream-pending"
+fi
 
 # --- Write persistent state file ---
 STATE_FILE=".claude/memory-state.json"
 mkdir -p .claude
 
 CHECKPOINT_JSON="[]"
-if [[ -d "$PROJECT_DIR" ]]; then
+if [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
     CHECKPOINT_LIST=""
-    while IFS= read -r -d '' file; do
+    for file in "${PENDING_CHECKPOINTS[@]}"; do
         if [[ -n "$CHECKPOINT_LIST" ]]; then
             CHECKPOINT_LIST="$CHECKPOINT_LIST, "
         fi
         CHECKPOINT_LIST="$CHECKPOINT_LIST\"$file\""
-    done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
-    if [[ -n "$CHECKPOINT_LIST" ]]; then
-        CHECKPOINT_JSON="[$CHECKPOINT_LIST]"
-    fi
+    done
+    CHECKPOINT_JSON="[$CHECKPOINT_LIST]"
 fi
 
 DREAM_PENDING="false"
@@ -173,21 +234,11 @@ if [[ -n "$GIT_DIR_PATH" ]]; then
     fi
 fi
 
-# Check for pending checkpoints
-PENDING_CHECKPOINTS=()
-while IFS= read -r -d '' file; do
-    PENDING_CHECKPOINTS+=("$file")
-done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
-
-# Check prior session info
-PRIOR_SESSION_INFO=""
-if [[ -f "$PROJECT_DIR/.session-meta" ]]; then
-    PRIOR_SESSION_INFO=$(cat "$PROJECT_DIR/.session-meta")
-fi
-
-# Reset session meta
+# Reset session meta. session_start_epoch is the cross-hook contract the Stop
+# hook reads to compute session duration without a date -d parse (Task 6).
 cat > "$PROJECT_DIR/.session-meta" << EOF
 session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+session_start_epoch=$NOW_EPOCH
 message_count=0
 project_slug=$SLUG
 area=$AREA
@@ -232,53 +283,141 @@ else
 fi
 CONTEXT+="\\n"
 
-# --- CLI-driven vault state ---
+# --- CLI-driven vault state (cached + parallelised) ---
 if [[ "$CLI_OK" == "true" ]]; then
 
-    # Project status from index
-    INDEX_ROW=$("$OBS" search:context query="$SLUG" path="5 Agent Memory/project-index.md" format=json 2>/dev/null || echo "")
-    if [[ -n "$INDEX_ROW" ]] && [[ "$INDEX_ROW" != "[]" ]]; then
-        CONTEXT+="### Project Status\\n"
-        # Extract just the matching text lines
-        INDEX_TEXT=$(echo "$INDEX_ROW" | jq -r '.[0].matches[].text' 2>/dev/null | head -3 || true)
-        if [[ -n "$INDEX_TEXT" ]]; then
-            CONTEXT+="$INDEX_TEXT\\n"
-        fi
-        CONTEXT+="\\n"
+    # Cache the non-safety-critical fragments per slug+branch so a warm restart
+    # skips four CLI round-trips. Corrections are deliberately NOT cached — a
+    # stale corrections fragment could silently drop a safety override — so they
+    # always run live below. The cache holds pre-rendered context text, keyed by
+    # branch so a concurrent session on another branch does not read this
+    # branch's tasks/working files. $BRANCH was already resolved by the Git
+    # section above; reuse it instead of spawning `git branch` again.
+    BRANCH_KEY=$(echo "${BRANCH:-nobranch}" | sed 's/[^A-Za-z0-9._-]/-/g')
+    CACHE_FILE="$PROJECT_DIR/.vault-cache-$BRANCH_KEY.txt"
+    VAULT_FRAGMENT=""
+
+    # Warm hit: cache younger than 15 minutes.
+    if [[ -n "$(find "$CACHE_FILE" -mmin -15 2>/dev/null || true)" ]]; then
+        VAULT_FRAGMENT=$(cat "$CACHE_FILE" 2>/dev/null || true)
     fi
 
-    # Open tasks
-    TASKS=$("$OBS" search:context query="- \[ \]" path="5 Agent Memory/sessions/by-project/$SLUG" format=json limit=5 2>/dev/null || echo "")
-    if [[ -n "$TASKS" ]] && [[ "$TASKS" != "[]" ]]; then
-        CONTEXT+="### Open Items\\n"
-        TASK_LINES=$(echo "$TASKS" | jq -r '.[].matches[].text' 2>/dev/null | head -5 || true)
-        if [[ -n "$TASK_LINES" ]]; then
-            CONTEXT+="$(echo "$TASK_LINES" | sed 's/^/  /')\\n"
+    if [[ -z "$VAULT_FRAGMENT" ]]; then
+        # Cold path: run the four cacheable queries in parallel, each to its own
+        # temp file with a completion marker, then a single bounded wait (~3s).
+        # PID-scoped temp dir so two sessions on the same project don't delete
+        # each other's in-flight query output.
+        SS_TMP="$PROJECT_DIR/.ss-tmp.$$"
+        rm -rf "$SS_TMP" 2>/dev/null || true
+        mkdir -p "$SS_TMP"
+
+        # Each job marks .ok ONLY on a zero-exit query (the .done marker fires
+        # unconditionally for the watchdog). A failed query writes an empty file
+        # but no .ok, so the cache write below can refuse to persist a partial.
+        PIDS=()
+        { "$OBS" search:context query="$SLUG" path="5 Agent Memory/project-index.md" format=json > "$SS_TMP/index" 2>/dev/null && touch "$SS_TMP/index.ok"; touch "$SS_TMP/index.done"; } &
+        PIDS+=($!)
+        { "$OBS" search:context query="- \[ \]" path="5 Agent Memory/sessions/by-project/$SLUG" format=json limit=5 > "$SS_TMP/tasks" 2>/dev/null && touch "$SS_TMP/tasks.ok"; touch "$SS_TMP/tasks.done"; } &
+        PIDS+=($!)
+        { "$OBS" search query="$SLUG" path="5 Agent Memory/working" format=json > "$SS_TMP/working" 2>/dev/null && touch "$SS_TMP/working.ok"; touch "$SS_TMP/working.done"; } &
+        PIDS+=($!)
+        { "$OBS" search query="type: session" path="5 Agent Memory/sessions/by-project/$SLUG" format=json > "$SS_TMP/depth" 2>/dev/null && touch "$SS_TMP/depth.ok"; touch "$SS_TMP/depth.done"; } &
+        PIDS+=($!)
+
+        # Watchdog: poll completion markers up to ~3s. Marker presence (not
+        # kill -0, which sees finished-but-unreaped jobs as alive) decides done.
+        VAULT_TIMEOUT=1
+        for ((i = 0; i < 30; i++)); do
+            if [[ -f "$SS_TMP/index.done" && -f "$SS_TMP/tasks.done" \
+               && -f "$SS_TMP/working.done" && -f "$SS_TMP/depth.done" ]]; then
+                VAULT_TIMEOUT=0
+                break
+            fi
+            sleep 0.1
+        done
+
+        if [[ "$VAULT_TIMEOUT" == "1" ]]; then
+            for pid in "${PIDS[@]}"; do
+                kill "$pid" 2>/dev/null || true
+            done
         fi
-        CONTEXT+="\\n"
+        wait 2>/dev/null || true
+
+        if [[ "$VAULT_TIMEOUT" == "1" ]]; then
+            VAULT_FRAGMENT="⚠ Vault query timed out (>3s) — minimal context. Use memberberry for detail.\\n\\n"
+        else
+            FRAG=""
+            INDEX_ROW=$(cat "$SS_TMP/index" 2>/dev/null || echo "")
+            if [[ -n "$INDEX_ROW" ]] && [[ "$INDEX_ROW" != "[]" ]]; then
+                INDEX_TEXT=$(echo "$INDEX_ROW" | jq -r '.[0].matches[].text' 2>/dev/null | head -3 || true)
+                if [[ -n "$INDEX_TEXT" ]]; then
+                    FRAG+="### Project Status\\n$INDEX_TEXT\\n\\n"
+                fi
+            fi
+            TASKS=$(cat "$SS_TMP/tasks" 2>/dev/null || echo "")
+            if [[ -n "$TASKS" ]] && [[ "$TASKS" != "[]" ]]; then
+                TASK_LINES=$(echo "$TASKS" | jq -r '.[].matches[].text' 2>/dev/null | head -5 || true)
+                if [[ -n "$TASK_LINES" ]]; then
+                    FRAG+="### Open Items\\n$(echo "$TASK_LINES" | sed 's/^/  /')\\n\\n"
+                fi
+            fi
+            WORKING=$(cat "$SS_TMP/working" 2>/dev/null || echo "")
+            if [[ -n "$WORKING" ]] && [[ "$WORKING" != "[]" ]]; then
+                WORKING_LIST=$(echo "$WORKING" | jq -r '.[]' 2>/dev/null | head -5 | sed 's/^/- /' || true)
+                if [[ -n "$WORKING_LIST" ]]; then
+                    FRAG+="### Working Files\\n$WORKING_LIST\\n\\n"
+                fi
+            fi
+            SESSION_COUNT=$(cat "$SS_TMP/depth" 2>/dev/null || echo "[]")
+            COUNT=$(echo "$SESSION_COUNT" | jq 'length' 2>/dev/null || echo "0")
+            FRAG+="Memory depth: $COUNT prior sessions\\n\\n"
+            VAULT_FRAGMENT="$FRAG"
+            # Cache only when ALL four queries succeeded. A single failed query
+            # writes an empty file but still marks .done, so without this guard a
+            # transient failure would poison the 15-min warm cache with a
+            # confidently-wrong partial render.
+            ALL_OK=1
+            for q in index tasks working depth; do
+                [[ -f "$SS_TMP/$q.ok" ]] || ALL_OK=0
+            done
+            if [[ "$ALL_OK" == "1" ]]; then
+                printf '%s' "$VAULT_FRAGMENT" > "$CACHE_FILE.tmp.$$" 2>/dev/null && mv "$CACHE_FILE.tmp.$$" "$CACHE_FILE" 2>/dev/null || true
+            fi
+        fi
+        rm -rf "$SS_TMP" 2>/dev/null || true
     fi
 
-    # Working files
-    WORKING=$("$OBS" search query="$SLUG" path="5 Agent Memory/working" format=json 2>/dev/null || echo "")
-    if [[ -n "$WORKING" ]] && [[ "$WORKING" != "[]" ]]; then
-        CONTEXT+="### Working Files\\n"
-        WORKING_LIST=$(echo "$WORKING" | jq -r '.[]' 2>/dev/null | head -5 | sed 's/^/- /' || true)
-        if [[ -n "$WORKING_LIST" ]]; then
-            CONTEXT+="$WORKING_LIST\\n"
-        fi
-        CONTEXT+="\\n"
-    fi
+    CONTEXT+="$VAULT_FRAGMENT"
 
-    # Corrections flag
-    CORRECTIONS=$("$OBS" search query="$SLUG" path="5 Agent Memory/learnings/corrections" format=json 2>/dev/null || echo "")
-    if [[ -n "$CORRECTIONS" ]] && [[ "$CORRECTIONS" != "[]" ]]; then
+    # Corrections — ALWAYS live (never cached); the highest-stakes fragment.
+    # The CLI returns a JSON array on match and the literal "No matches found."
+    # on none (exit 0 either way), so detect via jq array length, not emptiness.
+    # On a genuine query failure (neither a JSON array nor the no-match
+    # sentinel) FAIL CLOSED: keep the last-known index and warn from it rather
+    # than silently dropping a safety override.
+    CORRECTIONS=$("$OBS" search query="$SLUG" path="5 Agent Memory/learnings/corrections" format=json 2>/dev/null || true)
+    CORR_LEN=$(printf '%s' "$CORRECTIONS" | jq -r 'if type=="array" then length else -1 end' 2>/dev/null || echo -1)
+    # Normalise empty/garbled jq output to -1 so an empty CLI response is treated
+    # as a failure (fail closed), not as a 0-length "genuinely empty" array.
+    [[ "$CORR_LEN" =~ ^-?[0-9]+$ ]] || CORR_LEN=-1
+    if [[ "$CORR_LEN" -gt 0 ]]; then
         CONTEXT+="### ⚠ Corrections exist — load via memberberry before making assumptions\\n\\n"
+        # Build the index in one awk pass (title|keywords per correction) rather
+        # than basename+tr+sed per file. POSIX awk only. Strip |/CR from the
+        # title so a crafted vault filename can't corrupt the index format the
+        # UserPromptSubmit hook (Task 9) parses on |.
+        printf '%s' "$CORRECTIONS" | jq -r '.[]' 2>/dev/null | awk -F/ '
+            $0 == "" { next }
+            { name = $NF; sub(/\.md$/, "", name); gsub(/[|\r]/, "-", name);
+              key = tolower(name); gsub(/[-_]/, " ", key); print name "|" key }
+        ' > "$PROJECT_DIR/.corrections-index" 2>/dev/null || true
+    elif [[ "$CORR_LEN" -eq 0 ]] || printf '%s' "$CORRECTIONS" | grep -qi 'No matches found'; then
+        # Genuine empty (empty array or the no-match sentinel) — clear the index.
+        rm -f "$PROJECT_DIR/.corrections-index" 2>/dev/null || true
+    elif [[ -s "$PROJECT_DIR/.corrections-index" ]]; then
+        # Query failed (not parseable, not the sentinel) — fail closed.
+        CONTEXT+="### ⚠ Corrections exist (cached — live check failed) — load via memberberry\\n\\n"
     fi
-
-    # Session depth
-    SESSION_COUNT=$("$OBS" search query="type: session" path="5 Agent Memory/sessions/by-project/$SLUG" format=json 2>/dev/null || echo "[]")
-    COUNT=$(echo "$SESSION_COUNT" | jq 'length' 2>/dev/null || echo "0")
-    CONTEXT+="Memory depth: $COUNT prior sessions\\n\\n"
 
 else
     CONTEXT+="⚠ Obsidian CLI unavailable. Open Obsidian or check PATH.\\n"
@@ -299,13 +438,9 @@ if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
     CONTEXT+="💤 **Dream consolidation pending.** Run \`/memory-sync --dream\` when ready.\\n\\n"
 fi
 
-# Prior session info
-if [[ -n "$PRIOR_SESSION_INFO" ]]; then
-    PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
-    PRIOR_COUNT="${PRIOR_COUNT:-0}"
-    if [[ "$PRIOR_COUNT" -gt 10 ]]; then
-        CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced (\`/memory-sync --status\`).\\n\\n"
-    fi
+# Prior session info (PRIOR_COUNT captured before the meta reset above)
+if [[ "$PRIOR_COUNT" -gt 10 ]]; then
+    CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced (\`/memory-sync --status\`).\\n\\n"
 fi
 
 # --- Delegation guidance ---
