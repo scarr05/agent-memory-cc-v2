@@ -4,6 +4,8 @@ A hook-enforced persistent memory system that extends Claude Code with determini
 
 This is a configuration and tooling package — not a traditional software project with a build system.
 
+**v3** introduces Obsidian CLI for token-efficient reads, Haiku subagents for retrieval (memberberry) and checkpoint capture (blackbox), a vendored read-once hook for source code deduplication, and slimmed CLAUDE.md templates.
+
 ## Why Hooks?
 
 `CLAUDE.md` instructions are advisory. The model can choose to ignore them, forget them after compaction, or simply not follow through. Hooks are deterministic — they fire on every session start, before every compaction, and after every response. Memory operations happen reliably, not just when the model remembers to do them.
@@ -20,13 +22,36 @@ Hooks cannot call MCP directly. Instead, they write to local staging files and i
 
 See [docs/hooks-architecture.md](docs/hooks-architecture.md) for the full design document covering the hook-MCP bridge pattern, slug detection logic, and interaction flows.
 
+### Subagents
+
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| `memberberry` | Haiku | Memory retrieval — progressive CLI search → filter → summarise |
+| `blackbox` | Haiku | Session checkpoint — captures state before compaction |
+
+Agent definitions live in `agents/` and are deployed to `~/.claude/agents/`.
+
+### read-once Hook
+
+A vendored PreToolUse hook that prevents redundant file re-reads within a session. Saves ~2,000 tokens per blocked re-read.
+
+Vendored from [Boucle framework](https://github.com/Bande-a-Bonnot/Boucle-framework/tree/main/tools/read-once).
+
+Configuration via environment variables — see `hooks/read-once/README.md`.
+
 ## Repository Structure
 
 ```
+├── agents/
+│   ├── memberberry.md          # Haiku subagent for vault retrieval via CLI
+│   └── blackbox.md             # Haiku subagent for session checkpoint capture
 ├── hooks/
-│   ├── session-start.sh        # Detect project slug, flag pending checkpoints, inject context
-│   ├── pre-compact.sh          # Create checkpoint stub before context compaction
-│   └── stop-memory.sh          # Track message count, nudge for /memory-sync at thresholds
+│   ├── session-start.sh        # Detect project slug, CLI-driven vault state, inject context
+│   ├── pre-compact.sh          # Create checkpoint stub, clear read-once cache
+│   ├── stop-memory.sh          # Track message count, nudge for /memory-sync at thresholds
+│   └── read-once/
+│       ├── hook.sh             # PreToolUse hook — block/warn on redundant file reads
+│       └── README.md           # Configuration and integration docs
 ├── commands/
 │   ├── memory-init.md          # One-time project setup and Obsidian folder creation
 │   ├── memory-sync.md          # End-of-session sync to Obsidian vault
@@ -41,7 +66,10 @@ See [docs/hooks-architecture.md](docs/hooks-architecture.md) for the full design
 │   ├── hooks-architecture.md   # Full system design document
 │   ├── memory-architecture.md  # Architecture deep-dive and design decisions
 │   ├── setup-guide-v2.md       # Step-by-step installation guide
+│   ├── cli-setup.md            # Per-platform Obsidian CLI PATH setup
 │   └── project-index-template.md  # Template for Obsidian project index
+├── skills/obsidian-cli/        # Obsidian CLI command reference skill
+│   └── SKILL.md
 └── skills/agent-memory/        # Claude Code skill for memory operations
     ├── SKILL.md                # Skill definition — memory read/write patterns
     ├── INSTALL.md              # Skill installation instructions
@@ -53,12 +81,15 @@ See [docs/hooks-architecture.md](docs/hooks-architecture.md) for the full design
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and working
 - [MCP-Obsidian](https://github.com/smithery-ai/mcp-obsidian) server configured and connected
 - An Obsidian vault with a `5 Agent Memory/` folder
+- Obsidian 1.12+ with CLI enabled — see [docs/cli-setup.md](docs/cli-setup.md) for per-platform setup
+- Claude Code with subagent support
+- Max subscription (for Haiku subagent delegation)
 
 ## Quick Start
 
 See [docs/setup-guide-v2.md](docs/setup-guide-v2.md) for full installation steps.
 
-In short: hook scripts from `hooks/` go to `~/.claude/hooks/`, slash commands from `commands/` go to `~/.claude/commands/`, and `config/settings.json` gets merged into `~/.claude/settings.json`.
+In short: hook scripts from `hooks/` go to `~/.claude/hooks/`, slash commands from `commands/` go to `~/.claude/commands/`, `config/settings.json` gets merged into `~/.claude/settings.json`, agent definitions from `agents/` go to `~/.claude/agents/`, and read-once hook from `hooks/read-once/` goes to `~/.claude/hooks/read-once/`.
 
 ## Vault Structure
 
@@ -120,6 +151,17 @@ Deep consolidation that mines recent session transcripts (JSONL files) for decis
 - Auto-memory ingest from Claude Code's built-in memory
 
 The stop hook checks a 24-hour timer and the session-start hook nudges when dream consolidation is due. `--ingest` and `--tidy` are now aliases for dream phases 3 and 4.
+
+## Troubleshooting
+
+### `obsidian: command not found` in Claude Code (Windows)
+
+Git Bash doesn't resolve `.com` extensions, so `obsidian` won't find `Obsidian.com` even when its directory is on PATH. Fix with both:
+
+1. **Symlink:** `ln -s "/c/Program Files/Obsidian/Obsidian.com" ~/.local/bin/obsidian`
+2. **Env var** in `~/.claude/settings.json`: `"OBSIDIAN_CLI_PATH": "/c/Program Files/Obsidian/Obsidian.com"`
+
+See [docs/cli-setup.md](docs/cli-setup.md) for full details.
 
 ## Related Documentation
 

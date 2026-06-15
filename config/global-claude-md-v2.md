@@ -17,26 +17,19 @@ The SessionStart hook fires before your first response and injects:
 
 ### At Session Start (non-trivial tasks)
 
-The hook gives you the slug. Use it:
+The hook gives you the slug and dynamic state. For prior context:
 
-1. Search Obsidian for prior context:
-   ```
-   search_notes(query="<slug>", searchContent=true)
-   ```
-   Search in: `5 Agent Memory/sessions/by-project/<slug>/`, `5 Agent Memory/learnings/`
-
-2. Briefly state what you found and how it applies. Don't dump everything.
-
-3. Check `5 Agent Memory/project-index.md` if cross-project context would help.
-
+1. Delegate to the **memberberry** subagent — it searches the vault using the Obsidian CLI and returns a filtered summary.
+2. Do NOT call MCP `search_notes` or read vault notes directly — memberberry handles this more efficiently via Haiku.
+3. Briefly state what memberberry found and how it applies.
 4. Do NOT read `5 Agent Memory/_context.md` unless you specifically need my current priorities.
 
 ### During Work
 
 - Use `5 Agent Memory/working/` freely as scratchpad for in-progress state
 - If the Stop hook nudges about session length, acknowledge it
-- If context hits ~50%, checkpoint to `working/` before compaction
-- The PreCompact hook creates a staging file automatically — fill it in with actual session state when you can
+- If context hits ~50%, delegate to **blackbox** subagent to capture a checkpoint before compaction
+- The PreCompact hook creates a staging file automatically — blackbox can fill it or write its own checkpoint directly to the vault
 - If memory context is missing after compaction or `/clear`, run `/memory-load` to restore it. Persistent state is in `.claude/memory-state.json`.
 
 ### Session End
@@ -63,9 +56,26 @@ Log sessions where: key decisions were made, meaningful progress occurred, a dir
 - Python for scripts, Node.js for services
 - draw.io for architecture diagrams (I have a skill for this)
 
-## MCP Tools Available
+## Tools Available
 
-- **MCP-Obsidian**: read_note, write_note, search_notes, get_frontmatter, list_directory, update_frontmatter, move_note, manage_tags, read_multiple_notes, get_notes_info, patch_note
+### Obsidian CLI (reads — used by subagents)
+
+Requires Obsidian 1.12+ with CLI enabled. Used by memberberry and blackbox subagents for token-efficient vault reads.
+
+Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, `links`, `tasks`, `create`, `append`
+
+### MCP-Obsidian (writes — and fallback reads)
+
+- **Writes:** write_note, patch_note, update_frontmatter, move_note, manage_tags
+- **Reads (fallback if subagents unavailable):** read_note, search_notes, get_frontmatter, list_directory, read_multiple_notes, get_notes_info
+
+### Subagents
+
+- **memberberry** — Memory retrieval. Delegate all vault read operations here.
+- **blackbox** — Session checkpoint capture before compaction.
+
+### Context7
+
 - **Context7**: resolve-library-id, get-library-docs (USE THIS for any library/framework docs — don't rely on training data)
 
 ## Memory File Paths

@@ -100,7 +100,17 @@ source_agent: "claude-code"
 <If resumable: true — include file paths, current state, exact next step. Enough context for a fresh agent to continue.>
 ```
 
-### Step 3.5: Append to Decisions Log
+### Step 3.5: Set status via CLI (if available)
+
+After writing the session note, if Obsidian CLI is available, set the status property:
+
+```bash
+${OBSIDIAN_CLI_PATH:-obsidian} property:set name="status" value="complete" path="<session note path>" 2>/dev/null || true
+```
+
+This is a convenience — the frontmatter already has the status, but the CLI property:set makes it queryable independently.
+
+### Step 3.6: Append to Decisions Log
 
 If any decisions were made this session (from the `decisions:` frontmatter array in the session note just written):
 

@@ -5,8 +5,12 @@
 
 set -euo pipefail
 
+# Clear read-once cache — prevents stale state after compaction
+rm -rf "$HOME/.claude/read-once/cache/" 2>/dev/null || true
+
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
+OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
 # --- Slug detection: state file first, then fallback ---
 STATE_FILE=".claude/memory-state.json"
@@ -76,17 +80,17 @@ status: pending
 ## Pre-Compaction Checkpoint
 
 This checkpoint was created automatically before context compaction.
-Claude should update this with the actual session state when it next
-has the opportunity (SessionStart will flag it as pending).
+The blackbox subagent should update this with actual session state.
+If blackbox is unavailable, Claude should fill this in manually.
 
 ## Session State
-[To be filled by Claude — summarise decisions, progress, open items]
+[To be filled by blackbox or Claude — summarise decisions, progress, open items]
 
 ## Key Files Modified
-[To be filled by Claude — list files changed this session]
+[To be filled by blackbox or Claude — list files changed this session]
 
 ## Next Steps
-[To be filled by Claude — what was about to happen before compaction]
+[To be filled by blackbox or Claude — what was about to happen before compaction]
 EOF
 
 # Update state file with new checkpoint
@@ -119,12 +123,10 @@ if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
     CONTEXT+="💤 **Dream consolidation pending.** Run \`/memory-sync --dream\` when you have a moment.\\n\\n"
 fi
 
-CONTEXT+="**For non-trivial tasks:** Search Obsidian for prior context before starting:\\n"
-CONTEXT+="\`search_notes(query=\\"$SLUG\\", searchContent=true)\` in \`5 Agent Memory/\`\\n"
+CONTEXT+="### Memory Agents\\n"
+CONTEXT+="→ For prior context: delegate to **memberberry** subagent.\\n"
+CONTEXT+="→ For checkpoint capture: delegate to **blackbox** subagent.\\n"
+CONTEXT+="→ Do NOT call MCP search_notes or read vault notes directly.\\n"
 
 # Output combined context
-cat << HOOKJSON
-{
-  "systemMessage": "$(echo -e "$CONTEXT" | sed 's/"/\\"/g' | tr '\n' ' ')"
-}
-HOOKJSON
+jq -n --arg msg "$(echo -e "$CONTEXT")" '{"systemMessage": $msg}'

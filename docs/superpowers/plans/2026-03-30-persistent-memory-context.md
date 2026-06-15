@@ -65,14 +65,14 @@ Create a temporary test file and verify:
 mkdir -p /tmp/test-memory-hooks/.claude
 cat > /tmp/test-memory-hooks/.claude/CLAUDE.md << 'EOF'
 # Test Project
-<!-- memory:project-slug=wafr-discovery -->
+<!-- memory:project-slug=my-project -->
 <!-- memory:area=AWS -->
 EOF
 
 cd /tmp/test-memory-hooks && echo '{}' | bash ~/.claude/hooks/session-start.sh 2>/dev/null
 ```
 
-Expected: JSON output containing `"wafr-discovery"` as the slug and `"AWS"` as the area.
+Expected: JSON output containing `"my-project"` as the slug and `"AWS"` as the area.
 
 - [ ] **Step 4: Test fallback when no CLAUDE.md metadata exists**
 

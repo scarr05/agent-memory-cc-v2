@@ -2,6 +2,8 @@
 description: "Load relevant context from Obsidian vault for the current project. Use at session start or when switching to a different area of work. Lightweight alternative to manually searching memory."
 user-invocable: true
 allowed-tools:
+  - "Agent"
+  - "Bash"
   - "obsidian:read_note"
   - "obsidian:search_notes"
   - "obsidian:get_frontmatter"
@@ -73,45 +75,52 @@ Obsidian session path: `<sessionPath>`
 
 Then continue with the normal Obsidian context loading below.
 
-### 1. Identify Context Needed
+### 1. Delegate to memberberry
 
-Use the project slug from Step 0. If $ARGUMENTS is provided, use it as an additional search topic alongside the slug.
-
-### 2. Check Project Index
+After restoring hook-level context (Step 0), delegate the vault search to the memberberry subagent:
 
 ```
-read_note("5 Agent Memory/project-index.md")
+Use the memberberry agent to find prior context for project "<slug>".
 ```
 
-Find the relevant project row. Note last session date and key decisions.
-
-### 3. Load Recent Sessions
-
+If $ARGUMENTS was provided, pass it as the search topic:
 ```
-search_notes(query="<project-name>", searchContent=true)
+Use the memberberry agent to find context about "<$ARGUMENTS>" for project "<slug>".
 ```
 
-Search `5 Agent Memory/sessions/by-project/<project-slug>/` for the most recent 2-3 sessions.
+memberberry will:
+- Search the vault using Obsidian CLI (progressive disclosure)
+- Check for corrections
+- Return a filtered summary
 
-Use `get_frontmatter` first to scan dates and status — only read full content of the most recent resumable session and the most recent completed session.
+If memberberry is unavailable or errors, fall back to the MCP steps below.
 
-### 4. Load Relevant Learnings
+### 2. Fallback: MCP Search (only if memberberry fails)
 
 ```
-search_notes(query="<project-name OR technology>", searchContent=true)
+search_notes(query="<slug>", searchContent=true)
 ```
 
-Search `5 Agent Memory/learnings/` for anything tagged with the current project or technology area.
+Search `5 Agent Memory/sessions/by-project/<slug>/` for recent sessions.
+Use `get_frontmatter` to scan dates and status before reading full content.
 
-### 5. Check Working Files
+### 3. Fallback: Load Learnings
+
+```
+search_notes(query="<slug OR technology>", searchContent=true)
+```
+
+Search `5 Agent Memory/learnings/` for project-related learnings.
+
+### 4. Fallback: Check Working Files
 
 ```
 list_directory("5 Agent Memory/working/")
 ```
 
-If there are any active working files for this project, read them — they might contain in-progress state from a prior session.
+Read any active working files for this project.
 
-### 6. Summarise
+### 5. Summarise
 
 Present a concise summary to the user:
 
@@ -130,7 +139,7 @@ Ready to continue. What are we working on?
 
 Keep the summary SHORT. Don't dump entire session notes. The goal is enough context to avoid re-explaining, not a full history lesson.
 
-### 7. If Nothing Found
+### 6. If Nothing Found
 
 If no relevant memory exists, say so cleanly:
 

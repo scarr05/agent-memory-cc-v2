@@ -32,12 +32,12 @@ Written by SessionStart after slug detection. Read by PreCompact and `/memory-lo
 
 ```json
 {
-  "slug": "wafr-discovery",
+  "slug": "my-project",
   "area": "AI",
-  "sessionPath": "5 Agent Memory/sessions/by-project/wafr-discovery/",
+  "sessionPath": "5 Agent Memory/sessions/by-project/my-project/",
   "detectedVia": "claude-md-metadata",
   "pendingCheckpoints": [
-    "/c/Users/user/.claude/memory-staging/wafr-discovery/checkpoint-2026-03-29T20-33-37Z.md"
+    "~/.claude/memory-staging/my-project/checkpoint-2026-03-29T20-33-37Z.md"
   ],
   "dreamPending": false,
   "lastUpdated": "2026-03-30T10:00:00Z"
