@@ -28,17 +28,22 @@ The hook gives you the slug and dynamic state. For prior context:
 
 - Use `5 Agent Memory/working/` freely as scratchpad for in-progress state
 - If the Stop hook nudges about session length, acknowledge it
+- If the UserPromptSubmit hook surfaces a logged correction (it fires when my prompt touches that topic), honour it — it flags a past mistake I don't want repeated
 - If context hits ~50%, delegate to **blackbox** subagent to capture a checkpoint before compaction
 - The PreCompact hook creates a staging file automatically — blackbox can fill it or write its own checkpoint directly to the vault
 - If memory context is missing after compaction or `/clear`, run `/memory-load` to restore it. Persistent state is in `.claude/memory-state.json`.
 
 ### Session End
 
-When I run `/memory-sync`, follow that command's instructions. If I forget and the session was significant (decisions made, meaningful progress, direction changes), remind me.
+When I run `/memory-sync`, follow that command's instructions. If I forget and the session was significant (decisions made, meaningful progress, direction changes), remind me. The SessionEnd hook backs this up: a real-length session (≥10 messages) that ends without `/memory-sync` writes a `.unsynced` flag, and the next SessionStart surfaces a ⚠ "never synced" warning — when you see it, prompt me to sync.
 
 ### What Counts as Significant
 
 Log sessions where: key decisions were made, meaningful progress occurred, a direction changed, planning completed, or a long session is approaching context limits. Don't log quick Q&A.
+
+### Dream Consolidation
+
+Roughly every 24 hours the Stop hook surfaces a 💤 dream-pending nudge. When you see it (or when I ask), run `/memory-sync --dream` — it mines recent transcripts for un-logged decisions, corrections, and preferences, cross-references the vault, flags contradictions, and prunes stale sessions. It never writes without my approval — present the dream report first.
 
 ## Writing & Voice
 
