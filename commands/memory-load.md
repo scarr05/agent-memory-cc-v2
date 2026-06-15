@@ -1,15 +1,14 @@
 ---
 description: "Load relevant context from Obsidian vault for the current project. Use at session start or when switching to a different area of work. Lightweight alternative to manually searching memory."
-user-invocable: true
 allowed-tools:
   - "Agent"
   - "Bash"
-  - "obsidian:read_note"
-  - "obsidian:search_notes"
-  - "obsidian:get_frontmatter"
-  - "obsidian:list_directory"
-  - "obsidian:read_multiple_notes"
-  - "obsidian:get_notes_info"
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__get_notes_info"
 ---
 
 # /memory-load

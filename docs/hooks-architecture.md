@@ -6,13 +6,16 @@ CLAUDE.md instructions are advisory — the model can ignore them, especially af
 
 ## Hook Strategy
 
-Three hooks enforce the memory system programmatically:
+Six hooks enforce the memory system programmatically:
 
 | Hook Event | Purpose | Type |
 |-----------|---------|------|
-| **SessionStart** | Detect project, inject context pointer, validate setup | command |
-| **PreCompact** | Checkpoint session state to Obsidian before context shrinks | command |
-| **Stop** | Log session metadata, nudge for /memory-sync if significant | command |
+| **SessionStart** | Detect project, inject context pointer via `additionalContext`, flag unsynced sessions, run the post-compaction handoff | command |
+| **PreToolUse** (Read) | Deduplicate source-code re-reads (read-once) | command |
+| **PreCompact** | Write a checkpoint stub before context shrinks (side-effect only) | command |
+| **Stop** | Track message count, nudge for /memory-sync via `systemMessage` if significant | command |
+| **SessionEnd** | Flag a real-length session that ended without /memory-sync | command |
+| **UserPromptSubmit** | Surface a logged correction when the prompt touches its topic | command |
 
 Plus one enhanced slash command:
 
@@ -59,14 +62,16 @@ Fires every time Claude Code starts. Deterministic context injection.
 
 ### What It Does
 
-1. **Detect project slug** — reads `.claude/CLAUDE.md` for the `memory:project-slug` comment. If missing, falls back through detection priority chain.
+1. **Detect project slug** — reads `.claude/CLAUDE.md` for the `memory:project-slug` comment. If missing, falls back through the detection priority chain. The slug is charset-clamped before it touches any path.
 2. **Validate Obsidian structure** — checks if `5 Agent Memory/sessions/by-project/<slug>/` exists (via file check if vault is locally synced).
-3. **Inject context pointer** — outputs `additionalContext` telling Claude where to find memory and what slug to use.
-4. **Flag if uninitialised** — if no slug found, context tells Claude to suggest running `/memory-init`.
+3. **Inject context pointer** — outputs `hookSpecificOutput.additionalContext` telling Claude where to find memory and what slug to use (or plain stdout when `MEMORY_HOOK_PLAINTEXT=1`).
+4. **Flag pending work** — surfaces unprocessed checkpoints and the `.unsynced` marker SessionEnd leaves when a prior session was never synced.
+5. **Flag if uninitialised** — if no slug found, context tells Claude to suggest running `/memory-init`.
+6. **Handle the compaction restart** — when `source=compact`, runs a slim handoff path that surfaces the PreCompact stub and directs blackbox to fill it, deliberately preserving the session counter and start time across compaction.
 
-### Why SessionStart, Not UserPromptSubmit
+### SessionStart vs UserPromptSubmit
 
-SessionStart fires once. UserPromptSubmit fires on every message — too expensive for memory loading. The SessionStart hook just injects a pointer; the actual Obsidian reads happen via MCP when Claude acts on that pointer.
+SessionStart fires once and carries the bulk context load — too expensive to repeat per message. UserPromptSubmit fires on every prompt, so it does the one cheap, high-value thing that must be just-in-time: surfacing a correction the moment the prompt touches its topic (Hook 5). It exits before reading stdin in the common no-corrections case to stay under its 100ms budget. The heavy Obsidian reads still happen via MCP when Claude acts on the SessionStart pointer.
 
 ---
 
@@ -79,8 +84,8 @@ Fires before context compaction. This is the safety net — if the session gets 
 ### What It Does
 
 1. **Read project slug** from `.claude/CLAUDE.md`
-2. **Write checkpoint** — creates a timestamped checkpoint file in a local staging area (`~/.claude/memory-staging/<slug>/`)
-3. **Inject context** — tells Claude that a pre-compaction checkpoint was saved and to write it to Obsidian working/ when it gets a chance
+2. **Write checkpoint stub** — creates a timestamped stub in local staging (`~/.claude/memory-staging/<slug>/`) and clears the read-once cache for the session
+3. **Inject nothing** — Claude can't act mid-compaction, so the hook is a pure side effect. The handoff is deferred to the next SessionStart (`source=compact`), which surfaces the stub and directs blackbox to fill it.
 
 ### Why Local Staging, Not Direct Obsidian Write
 
@@ -96,13 +101,52 @@ Fires when Claude finishes responding. Lightweight session tracking.
 
 ### What It Does
 
-1. **Increment message counter** — tracks message count in `~/.claude/memory-staging/<slug>/.session-meta`
-2. **Check significance threshold** — if message count > 10 OR session duration > 30 minutes, flag as potentially significant
-3. **Inject nudge** — if significant, adds context: "This session looks substantial. Consider running /memory-sync before ending."
+1. **Increment message counter** — one awk pass updates the count and last-activity time in `~/.claude/memory-staging/<slug>/.session-meta`, deriving duration from the `session_start_epoch` SessionStart wrote.
+2. **Check thresholds** — fires at 15 and 30 messages (30 checked first, with independent sent-flags so a session that jumps past 15 still nudges), or after 45+ minutes; also checks the 24-hour dream timer.
+3. **Emit nudge** — via `systemMessage` (shown to the user, not Claude): "This session looks substantial. Consider running /memory-sync before ending."
 
 ### Why Not Auto-Write Sessions on Stop
 
 The Stop hook fires on EVERY response, not just session end. Auto-writing would create noise. Instead, it tracks and nudges. The human decides when to sync.
+
+---
+
+## Hook 4: SessionEnd
+
+**File:** `~/.claude/hooks/session-end.sh`
+
+Fires when the session ends (close, `exit`, `logout`, or `/clear`). It catches the case the Stop nudge can't: a substantial session that simply ends without `/memory-sync`.
+
+### What It Does
+
+1. **Read the end reason** from stdin. A `clear` is a deliberate wipe — skip it.
+2. **Detect and clamp the slug**, then read `.session-meta`.
+3. **Flag if unsynced** — if the session ran to real length (≥10 messages) and `.session-meta` has no `synced=true`, write an `.unsynced` marker (end time + message count) to staging.
+
+It emits no stdout and always exits 0 — SessionEnd can't block or inject. The next SessionStart surfaces the marker; `/memory-sync` owns removing it.
+
+### Why a Deterministic Flag, Not the Heuristic
+
+The old "previous session had N messages" hint was a guess. SessionEnd turns it into a fact: the marker means *this session ended unsynced*. SessionStart prefers the marker and falls back to the message-count heuristic only when it's absent — which still covers a crashed or killed session that never fired SessionEnd.
+
+---
+
+## Hook 5: UserPromptSubmit
+
+**File:** `~/.claude/hooks/prompt-corrections.sh`
+
+Fires on every prompt. Surfaces a logged correction the moment the prompt touches its topic, so Claude loads it *before* acting rather than repeating a known mistake.
+
+### What It Does
+
+1. **Detect and clamp the slug.**
+2. **Fast exit** — if there's no `.corrections-index` for the project (the common case), exit before reading stdin or spawning anything. This keeps the per-prompt cost under the 100ms budget.
+3. **Match** — otherwise, lowercase the prompt and literal-substring-match it against the index keys (built by SessionStart from correction-note titles).
+4. **Inject a pointer** — on a hit, emit `additionalContext`: "Correction(s) on record for: X. Load the details via memberberry before proceeding." (`MEMORY_HOOK_PLAINTEXT=1` falls back to plain stdout.)
+
+### Why Just-in-Time
+
+A correction loaded at SessionStart competes with everything else for attention and may be long-forgotten by the time it matters. Matching it to the live prompt surfaces it exactly when it's relevant, at the cost of one cheap string match per prompt.
 
 ---
 
@@ -177,21 +221,31 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 ```
 ~/.claude/
 ├── CLAUDE.md                              # Global instructions (already created)
+├── agents/
+│   ├── memberberry.md                     # Retrieval subagent (memory: user)
+│   └── blackbox.md                        # Checkpoint subagent (memory: project)
 ├── commands/
 │   ├── memory-sync.md                     # /memory-sync slash command
 │   ├── memory-load.md                     # /memory-load slash command
-│   └── memory-init.md                     # /memory-init slash command
+│   ├── memory-init.md                     # /memory-init slash command
+│   └── decision.md                        # /decision slash command
 ├── hooks/
 │   ├── session-start.sh                   # SessionStart hook
 │   ├── pre-compact.sh                     # PreCompact hook
-│   └── stop-memory.sh                     # Stop hook
+│   ├── stop-memory.sh                     # Stop hook
+│   ├── session-end.sh                     # SessionEnd hook
+│   ├── prompt-corrections.sh              # UserPromptSubmit hook
+│   └── read-once/hook.sh                  # PreToolUse hook
 ├── memory-staging/                        # Local staging for hook → MCP bridge
-│   ├── my-project/
-│   │   ├── .session-meta                  # Message count, timestamps
-│   │   └── checkpoint-2026-03-17T14:30.md # Pre-compaction checkpoint
-│   └── cairn/
+│   └── my-project/
+│       ├── .session-meta                  # Message count, timestamps, synced flag
+│       ├── .corrections-index             # title|key index for UserPromptSubmit
+│       ├── .unsynced                      # written by SessionEnd, cleared by /memory-sync
+│       └── checkpoint-2026-03-17T14-30.md # Pre-compaction stub
 └── settings.json                          # Hook configuration
 ```
+
+Installed as a plugin, the hooks, agents, and commands live at the plugin root instead, registered via `hooks/hooks.json` and `.claude-plugin/plugin.json` with `${CLAUDE_PLUGIN_ROOT}` paths.
 
 ---
 
@@ -234,37 +288,22 @@ The hooks are registered in `~/.claude/settings.json` (user-level, applies to al
 {
   "hooks": {
     "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/session-start.sh"
-          }
-        ]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/session-start.sh" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Read", "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/read-once/hook.sh" }] }
     ],
     "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/pre-compact.sh"
-          }
-        ]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/pre-compact.sh" }] }
     ],
     "Stop": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash ~/.claude/hooks/stop-memory.sh"
-          }
-        ]
-      }
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/stop-memory.sh" }] }
+    ],
+    "SessionEnd": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/session-end.sh" }] }
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "bash ~/.claude/hooks/prompt-corrections.sh" }] }
     ]
   }
 }
@@ -318,9 +357,14 @@ The hooks are registered in `~/.claude/settings.json` (user-level, applies to al
 
 ## Performance Considerations
 
-- **SessionStart hook:** ~100ms (file reads only, no network)
-- **PreCompact hook:** ~200ms (one file write to local disk)
-- **Stop hook:** ~50ms (increment counter in a file)
-- **Total overhead:** Negligible. All hooks are local file operations.
+Per-hook budgets, enforced as WARN (not FAIL) on the Tier 1 harness:
 
-The expensive operations (MCP-Obsidian reads/writes) happen in Claude's turn, not in the hooks. This keeps the hooks fast and the memory operations in the model's control.
+| Hook | Budget |
+|------|--------|
+| SessionStart | warm ≤300ms / cold ≤3s (cold runs the cacheable vault queries in parallel) |
+| PreCompact | ~200ms (one stub write) |
+| Stop | ≤50ms target |
+| SessionEnd | ≤100ms |
+| UserPromptSubmit | ≤100ms (fast-exits before stdin when no corrections exist) |
+
+On Windows Git Bash the empty-bash spawn floor alone can exceed 100ms, so the Stop and UserPromptSubmit targets aren't reachable there — the harness warns and fails only on a >2× regression against the recorded per-machine baseline. The expensive operations (MCP-Obsidian reads/writes) happen in Claude's turn, not in the hooks, keeping the lifecycle fast and the memory operations in the model's control.

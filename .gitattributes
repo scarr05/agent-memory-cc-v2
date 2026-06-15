@@ -1,0 +1,10 @@
+# Line-ending policy.
+#
+# This package deploys Bash hook scripts that break under CRLF, so shell scripts
+# are pinned to LF on every checkout regardless of a contributor's core.autocrlf
+# setting. JSON (plugin manifest, hook registration, settings) and Markdown
+# follow suit for consistency and to stop autocrlf churn on Windows clones.
+
+*.sh    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf

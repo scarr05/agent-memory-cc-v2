@@ -4,6 +4,15 @@ Prevents redundant file re-reads within a Claude Code session. Saves ~2,000 toke
 
 **Vendored from:** [Boucle framework](https://github.com/Bande-a-Bonnot/Boucle-framework/tree/main/tools/read-once)
 
+> **Divergence from upstream Boucle:** upstream emits the legacy PreToolUse
+> decision schema `{"decision": "allow"|"block", "reason": ...}`. This vendored
+> copy emits the current documented PreToolUse form instead:
+> `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision":
+> "allow"|"deny", "permissionDecisionReason": ...}}` — `deny` replaces the old
+> `block`. All output paths (jq-missing early exit, bad-config early exit,
+> unchanged-deny, unchanged-warn, and changed-diff) use this schema. Re-syncing
+> from upstream will reintroduce the legacy schema; re-apply this change.
+
 ## How It Works
 
 - Intercepts every `Read` tool call via PreToolUse hook

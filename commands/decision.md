@@ -1,14 +1,13 @@
 ---
 description: "Log a decision to the project's _decisions.md without a full session sync. Use for ad-hoc decisions in quick conversations."
-user-invocable: true
 allowed-tools:
-  - "obsidian:read_note"
-  - "obsidian:write_note"
-  - "obsidian:search_notes"
-  - "obsidian:patch_note"
-  - "obsidian:get_frontmatter"
-  - "obsidian:update_frontmatter"
-  - "obsidian:list_directory"
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__write_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__patch_note"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__update_frontmatter"
+  - "mcp__obsidian__list_directory"
   - "Bash"
   - "Read"
   - "Grep"

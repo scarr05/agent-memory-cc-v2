@@ -5,23 +5,23 @@
 
 set -euo pipefail
 
-# Clear read-once cache — prevents stale state after compaction
-rm -rf "$HOME/.claude/read-once/cache/" 2>/dev/null || true
+# Clear read-once cache for THIS session only — other sessions keep theirs.
+# Requires CLAUDE_SESSION_ID (the same key read-once/hook.sh uses). If it is
+# unset, skip the clear rather than wipe all sessions or target a wrong PID dir.
+if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
+    RO_SESSION=$(echo "$CLAUDE_SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+    rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true
+fi
 
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
-OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
 # --- Slug detection: state file first, then fallback ---
 STATE_FILE=".claude/memory-state.json"
 SLUG=""
-AREA=""
-SESSION_PATH=""
 
 if [[ -f "$STATE_FILE" ]]; then
     SLUG=$(jq -r '.slug // empty' "$STATE_FILE" 2>/dev/null || true)
-    AREA=$(jq -r '.area // empty' "$STATE_FILE" 2>/dev/null || true)
-    SESSION_PATH=$(jq -r '.sessionPath // empty' "$STATE_FILE" 2>/dev/null || true)
 fi
 
 # Fallback: detect slug if state file missing or empty
@@ -45,8 +45,11 @@ if [[ -z "$SLUG" ]]; then
         basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
     }
     SLUG=$(detect_slug)
-    SESSION_PATH="5 Agent Memory/sessions/by-project/$SLUG/"
 fi
+# Defence in depth: the state-file/git-remote branches are not charset-filtered.
+# Clamp so a crafted slug can't traverse out of the staging dir.
+SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+[[ -z "$SLUG" ]] && SLUG="unknown"
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -80,6 +83,8 @@ status: pending
 ## Pre-Compaction Checkpoint
 
 This checkpoint was created automatically before context compaction.
+Process this checkpoint at the start of the post-compaction session
+(SessionStart source=compact will direct this).
 The blackbox subagent should update this with actual session state.
 If blackbox is unavailable, Claude should fill this in manually.
 
@@ -93,40 +98,17 @@ If blackbox is unavailable, Claude should fill this in manually.
 [To be filled by blackbox or Claude — what was about to happen before compaction]
 EOF
 
-# Update state file with new checkpoint
+# Update state file with new checkpoint. If jq fails (malformed state file) this
+# is non-load-bearing: session-start.sh rebuilds pendingCheckpoints from disk by
+# globbing checkpoint-*.md, so the entry self-heals on the next start. Do not
+# promote this to a hard failure.
 if [[ -f "$STATE_FILE" ]]; then
     jq --arg cp "$CHECKPOINT_FILE" '.pendingCheckpoints += [$cp] | .lastUpdated = (now | todate)' "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "$STATE_FILE" || true
 fi
 
-# --- Build context re-injection ---
-CONTEXT="## Memory System Active (restored after compaction)\\n"
-CONTEXT+="Project slug: \`$SLUG\`\\n"
-
-if [[ -n "$AREA" ]]; then
-    CONTEXT+="Area: \`$AREA\`\\n"
-fi
-
-CONTEXT+="Obsidian session path: \`${SESSION_PATH:-5 Agent Memory/sessions/by-project/$SLUG/}\`\\n\\n"
-
-# List all pending checkpoints (including the one just created)
-CONTEXT+="📋 **Pending checkpoints:**\\n"
-CONTEXT+="- \`$CHECKPOINT_FILE\` (just created — fill in session state before compaction completes)\\n"
-while IFS= read -r -d '' file; do
-    if [[ "$file" != "$CHECKPOINT_FILE" ]]; then
-        CONTEXT+="- \`$file\` (from prior session)\\n"
-    fi
-done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
-CONTEXT+="Process these to Obsidian \`5 Agent Memory/working/\` when appropriate, then delete the staging files.\\n\\n"
-
-# Dream pending
-if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
-    CONTEXT+="💤 **Dream consolidation pending.** Run \`/memory-sync --dream\` when you have a moment.\\n\\n"
-fi
-
-CONTEXT+="### Memory Agents\\n"
-CONTEXT+="→ For prior context: delegate to **memberberry** subagent.\\n"
-CONTEXT+="→ For checkpoint capture: delegate to **blackbox** subagent.\\n"
-CONTEXT+="→ Do NOT call MCP search_notes or read vault notes directly.\\n"
-
-# Output combined context
-jq -n --arg msg "$(echo -e "$CONTEXT")" '{"systemMessage": $msg}'
+# No stdout. This hook is a filesystem side-effect only: it writes the checkpoint
+# stub and updates the state file. The post-compaction handoff is delivered by
+# session-start.sh when it next runs with source=compact (it surfaces the pending
+# checkpoint and directs blackbox to fill it in). Claude cannot act mid-compaction,
+# so emitting context here would be wasted.
+exit 0

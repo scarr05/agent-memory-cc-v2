@@ -1,0 +1,8 @@
+{
+  "name": "agent-memory",
+  "version": "4.0.0",
+  "description": "Hook-enforced persistent memory for Claude Code backed by an Obsidian vault. Three-tier storage, Haiku retrieval subagents, deterministic lifecycle hooks.",
+  "author": {
+    "name": "Sam Carr"
+  }
+}

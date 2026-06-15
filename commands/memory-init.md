@@ -1,15 +1,14 @@
 ---
 description: "Initialise a project for the memory system. Detects project from repo/folder, creates CLAUDE.md with memory metadata, sets up Obsidian folder structure, loads prior context. Run this once per project or re-run to refresh. The /init on steroids."
-user-invocable: true
 allowed-tools:
-  - "obsidian:read_note"
-  - "obsidian:write_note"
-  - "obsidian:search_notes"
-  - "obsidian:get_frontmatter"
-  - "obsidian:list_directory"
-  - "obsidian:update_frontmatter"
-  - "obsidian:patch_note"
-  - "obsidian:read_multiple_notes"
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__write_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__update_frontmatter"
+  - "mcp__obsidian__patch_note"
+  - "mcp__obsidian__read_multiple_notes"
   - "Bash"
   - "Read"
   - "Write"
