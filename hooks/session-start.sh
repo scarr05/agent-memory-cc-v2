@@ -208,18 +208,34 @@ fi
 if [[ "$SOURCE" == "compact" ]]; then
     if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" ]]; then
         CF="$PROJECT_DIR/handoff.md"
-        # Do not clobber an active manual handoff if one somehow exists.
-        if [[ ! -f "$CF" ]]; then
+        SUMM=""
+        if [[ -f "$CF" ]]; then
+            # An active handoff already exists (manual /handoff, or a prior compact
+            # harvest) — surface it, do not clobber or re-arm.
+            SUMM=$(extract_block NARRATIVE "$CF" 2>/dev/null || true)
+        else
+            # Build a compact-fallback scratch from CC's own summary, but only ARM it
+            # if the harvest actually recovered narrative text. An empty harvest (e.g.
+            # the isCompactSummary line not yet flushed to the transcript) must not arm
+            # a blank handoff that the next /clear would inject as "resuming".
             build_deterministic_handoff --transcript "$TRANSCRIPT" --slug "$SLUG" --source compact-fallback --out "$CF" 2>/dev/null || true
-            # Stamp supersedes from any prior consumed handoff so /memory-sync can
-            # dedup the chain (source!=handoff => the thin-guard is skipped).
-            finalize_handoff --out "$CF" --consumed "$PROJECT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
+            SUMM=$(extract_block NARRATIVE "$CF" 2>/dev/null || true)
+            if [[ -n "$(printf '%s' "$SUMM" | tr -d '[:space:]')" ]]; then
+                # Stamp supersedes from any prior consumed handoff so /memory-sync can
+                # dedup the chain (source!=handoff => the thin-guard is skipped).
+                finalize_handoff --out "$CF" --consumed "$PROJECT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
+            else
+                # Nothing recovered — drop the empty scratch so no stale handoff is left
+                # for a later /clear to inject.
+                rm -f "$CF" 2>/dev/null || true; SUMM=""
+            fi
         fi
         CONTEXT="## Memory System (post-compact) — \`$SLUG\`\\n"
-        if [[ -f "$CF" ]]; then
-            SUMM=$(extract_block NARRATIVE "$CF")
+        if [[ -n "$(printf '%s' "$SUMM" | tr -d '[:space:]')" ]]; then
             CONTEXT+="Recovered context from the compaction summary (full file: \`$CF\`):\\n\\n"
             CONTEXT+="$(printf '%s' "$SUMM" | sed 's/$/\\n/' | tr -d '\n')\\n"
+        else
+            CONTEXT+="No compaction summary was recoverable from the transcript yet — rely on memberberry below.\\n"
         fi
         CONTEXT+="\\n→ memberberry for prior context. Consider \`/handoff\` then \`/clear\` next time instead of compaction.\\n"
         emit_context_and_exit "$CONTEXT"

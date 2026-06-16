@@ -295,28 +295,90 @@ fi
 echo ""
 
 # --- Test: session-start.sh (source=compact) ---
-# Ordered after PreCompact so a checkpoint stub already exists. The compact path
-# must stay slim (skip the ### Git section) and surface the ACTION REQUIRED
-# handoff that points at the pending stub.
+# Three cases covering the v4 contract:
+#   1. No transcript: slim post-compact context, no ### Git, no ACTION REQUIRED.
+#   2. Transcript WITH isCompactSummary: narrative recovered, handoff.md armed.
+#   3. Transcript WITHOUT isCompactSummary (empty harvest): no "Recovered context"
+#      message, and handoff.md NOT left on disk. This is the regression case.
 echo "--- session-start.sh (source=compact) ---"
-if [[ -f "$SS_HOOK" ]]; then
-    SSC_OUTPUT=$(echo '{"source":"compact"}' | bash "$SS_HOOK" 2>/dev/null || true)
-    SSC_MSG=$(echo "$SSC_OUTPUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
-    if echo "$SSC_MSG" | grep -q 'post-compact'; then
-        pass "Compact source: slim post-compact context emitted"
+if [[ ! -f "$SS_HOOK" ]]; then
+    fail "session-start.sh not found (compact cases skipped)"
+else
+    # Derive the staging slug the same way the stop and pre-compact sections do.
+    SSC_SLUG="${SS_DETECTED_SLUG:-$PROJECT_NAME}"
+    SSC_STAGING="$HOME/.claude/memory-staging/$SSC_SLUG"
+    SSC_HF="$SSC_STAGING/handoff.md"
+    SSC_HF_CONSUMED="$SSC_STAGING/handoff.consumed.md"
+    mkdir -p "$SSC_STAGING" 2>/dev/null || true
+
+    # --- Case 1: no transcript ---
+    rm -f "$SSC_HF" "$SSC_HF_CONSUMED" 2>/dev/null || true
+    SSC1_OUTPUT=$(echo '{"source":"compact"}' | bash "$SS_HOOK" 2>/dev/null || true)
+    SSC1_MSG=$(echo "$SSC1_OUTPUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
+    if echo "$SSC1_MSG" | grep -q 'post-compact'; then
+        pass "Compact/no-transcript: post-compact context emitted"
     else
-        fail "Compact source: expected post-compact context, got: $(echo "$SSC_MSG" | head -c 200)"
+        fail "Compact/no-transcript: expected post-compact context, got: $(echo "$SSC1_MSG" | head -c 200)"
     fi
-    if echo "$SSC_MSG" | grep -q '### Git'; then
-        fail "Compact source: Git section present (should be skipped)"
+    if echo "$SSC1_MSG" | grep -q '### Git'; then
+        fail "Compact/no-transcript: Git section present (should be skipped)"
     else
-        pass "Compact source: Git section skipped"
+        pass "Compact/no-transcript: Git section skipped"
     fi
-    if echo "$SSC_MSG" | grep -q 'ACTION REQUIRED'; then
-        pass "Compact source: ACTION REQUIRED handoff present"
+    if echo "$SSC1_MSG" | grep -q 'ACTION REQUIRED'; then
+        fail "Compact/no-transcript: ACTION REQUIRED present (should not appear)"
     else
-        fail "Compact source: ACTION REQUIRED handoff missing (a checkpoint stub exists)"
+        pass "Compact/no-transcript: ACTION REQUIRED absent"
     fi
+
+    # --- Case 2: transcript WITH an isCompactSummary line (positive harvest) ---
+    rm -f "$SSC_HF" "$SSC_HF_CONSUMED" 2>/dev/null || true
+    SSC_T2=$(mktemp)
+    printf '%s\n' '{"type":"user","isCompactSummary":true,"message":{"content":"REGRESSION_SUMMARY_TOKEN continued from a previous conversation."}}' > "$SSC_T2"
+    SSC2_INPUT=$(printf '{"source":"compact","transcript_path":"%s"}' "$SSC_T2")
+    SSC2_OUTPUT=$(echo "$SSC2_INPUT" | bash "$SS_HOOK" 2>/dev/null || true)
+    SSC2_MSG=$(echo "$SSC2_OUTPUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
+    if echo "$SSC2_MSG" | grep -q 'REGRESSION_SUMMARY_TOKEN'; then
+        pass "Compact/positive-harvest: summary token present in context"
+    else
+        fail "Compact/positive-harvest: REGRESSION_SUMMARY_TOKEN missing from context"
+    fi
+    if echo "$SSC2_MSG" | grep -q 'Recovered context'; then
+        pass "Compact/positive-harvest: 'Recovered context' message emitted"
+    else
+        fail "Compact/positive-harvest: 'Recovered context' message missing"
+    fi
+    if [[ -f "$SSC_HF" ]]; then
+        pass "Compact/positive-harvest: handoff.md armed on disk"
+    else
+        fail "Compact/positive-harvest: handoff.md not armed"
+    fi
+    rm -f "$SSC_T2"
+
+    # --- Case 3: transcript WITHOUT any isCompactSummary line (empty harvest) ---
+    # This is the regression: the old code armed a blank handoff.md that the next
+    # /clear would inject as a spurious "RESUMING FROM HANDOFF" with no content.
+    rm -f "$SSC_HF" "$SSC_HF_CONSUMED" 2>/dev/null || true
+    SSC_T3=$(mktemp)
+    printf '%s\n' '{"type":"user","message":{"content":"Ordinary user message with no compaction summary."}}' > "$SSC_T3"
+    SSC3_INPUT=$(printf '{"source":"compact","transcript_path":"%s"}' "$SSC_T3")
+    SSC3_OUTPUT=$(echo "$SSC3_INPUT" | bash "$SS_HOOK" 2>/dev/null || true)
+    SSC3_MSG=$(echo "$SSC3_OUTPUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
+    if echo "$SSC3_MSG" | grep -q 'Recovered context from the compaction summary'; then
+        fail "Compact/empty-harvest: 'Recovered context from the compaction summary' emitted on empty harvest (regression)"
+    else
+        pass "Compact/empty-harvest: no spurious 'Recovered context from the compaction summary'"
+    fi
+    if [[ -f "$SSC_HF" ]]; then
+        fail "Compact/empty-harvest: blank handoff.md left on disk (would poison next /clear)"
+    else
+        pass "Compact/empty-harvest: no blank handoff.md left on disk"
+    fi
+    rm -f "$SSC_T3"
+
+    # Cleanup: remove any handoff files written during the compact tests so we
+    # do not leave state in the real staging directory.
+    rm -f "$SSC_HF" "$SSC_HF_CONSUMED" 2>/dev/null || true
 fi
 echo ""
 
