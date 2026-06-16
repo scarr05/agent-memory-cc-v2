@@ -10,21 +10,14 @@ STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
 STATE_FILE=".claude/memory-state.json"
 
-LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
-else
-    HANDOFF_LIB=0
-fi
-
 # SessionEnd receives JSON on stdin: { reason, transcript_path }.
 # reason: clear | logout | prompt_input_exit | other. A `clear` is a deliberate
 # wipe — it is never flagged unsynced, but it now falls through to slug detection
 # so it can harvest a clear-fallback handoff (handled below). Fail open otherwise.
+# The transcript and the handoff library are read lazily in the clear branch only,
+# so the common non-clear path (logout/other) stays lean.
 STDIN_JSON=$(cat || true)
 REASON=$(printf '%s' "$STDIN_JSON" | jq -r '.reason // empty' 2>/dev/null || true)
-TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
 # --- Fast slug detection: state file (sed, no jq) -> CLAUDE.md -> dirname ---
 SLUG=""
@@ -49,9 +42,17 @@ META_FILE="$PROJECT_DIR/.session-meta"
 
 # Bare /clear with no armed handoff: deterministically harvest a clear-fallback
 # so the thread is never silently lost. Never clobber an active manual handoff.
-# This branch is self-contained and exits before the unsynced logic — a deliberate
-# clear is never "unsynced".
+# The library + transcript are read lazily HERE so the common non-clear path
+# (logout/other) stays lean — this branch exits before the unsynced logic, so a
+# deliberate clear is never "unsynced".
 if [[ "$REASON" == "clear" ]]; then
+    LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    HANDOFF_LIB=0
+    if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
+    fi
+    TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
     if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" && ! -f "$PROJECT_DIR/handoff.md" ]]; then
         mkdir -p "$PROJECT_DIR"
         build_deterministic_handoff --transcript "$TRANSCRIPT" --slug "$SLUG" --source clear-fallback --out "$PROJECT_DIR/handoff.md" 2>/dev/null || true
