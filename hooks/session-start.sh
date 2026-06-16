@@ -208,7 +208,7 @@ fi
 if [[ "$SOURCE" == "compact" ]]; then
     if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" ]]; then
         CF="$PROJECT_DIR/handoff.md"
-        SUMM=""
+        # SUMM is assigned on every branch below before it is read further down.
         if [[ -f "$CF" ]]; then
             # An active handoff already exists (manual /handoff, or a prior compact
             # harvest) — surface it, do not clobber or re-arm.

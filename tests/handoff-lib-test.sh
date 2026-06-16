@@ -127,6 +127,28 @@ OUT3="$TMPD/compact2.md"
 printf '%s\n' '{"type":"user","isCompactSummary":true,"content":"Continued via the alternate content shape."}' > "$TMPD/compact2.jsonl"
 build_deterministic_handoff --transcript "$TMPD/compact2.jsonl" --slug "demo-proj" --source compact-fallback --out "$OUT3"
 assert_contains "compact-fallback reads .content shape" "alternate content shape" "$(cat "$OUT3")"
+
+# Regression (rc-leak): /handoff runs `bash handoff-lib.sh build ...`, so the whole
+# script executes under `set -euo pipefail`. A work unit with NO tagged decisions
+# must still exit 0 with a fully assembled file — the harvest helpers' no-match grep
+# must not leak rc=1 and trip set -e. Exercise the real CLI path (a sourced function
+# call can't reproduce the dispatcher exit code that /handoff actually observed).
+LIBSH="$HERE/../hooks/handoff-lib.sh"
+PLAIN="$TMPD/plain.jsonl"; OUT4="$TMPD/plain-handoff.md"
+printf '%s\n' \
+  '{"type":"user","message":{"content":"add a date helper please"}}' \
+  '{"type":"assistant","message":{"content":[{"type":"text","text":"Added it."}]}}' > "$PLAIN"
+RC_BUILD=0; bash "$LIBSH" build --transcript "$PLAIN" --slug "demo-proj" --source handoff --out "$OUT4" || RC_BUILD=$?
+assert_eq "build CLI exits 0 with no tagged decisions" "0" "$RC_BUILD"
+assert_contains "build CLI still writes the last section" "## Tagged Decisions / Corrections" "$(cat "$OUT4")"
+
+# Same guarantee for compact-fallback when CC left no isCompactSummary line: the
+# mid-assembly harvest_compact_summary must not truncate the file or fail the build.
+NOSUMM="$TMPD/nosumm.jsonl"; OUT5="$TMPD/nosumm-handoff.md"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"ordinary turn, no summary"}]}}' > "$NOSUMM"
+RC_CF=0; bash "$LIBSH" build --transcript "$NOSUMM" --slug "demo-proj" --source compact-fallback --out "$OUT5" || RC_CF=$?
+assert_eq "compact-fallback CLI exits 0 with no summary" "0" "$RC_CF"
+assert_contains "compact-fallback still writes the last section" "## Tagged Decisions / Corrections" "$(cat "$OUT5")"
 rm -rf "$TMPD"
 
 echo "----"

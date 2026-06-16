@@ -48,7 +48,7 @@ harvest_files() {
 # Git snapshot for the handoff: branch, dirty count, last 3 commits. Operates on
 # the current working directory (the command/hook runs in the repo root).
 harvest_git() {
-    if ! { command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; }; then
+    if ! { command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null; }; then
         echo "Not a git repo."
         return 0
     fi
@@ -73,7 +73,7 @@ harvest_decisions() {
                    else empty end)
              else empty end' 2>/dev/null \
         | sed -E 's#^/[a-z][a-z-]* ##' \
-        | grep -iE "actually|no,|wrong|incorrect|not right|stop doing|i meant|i prefer|always use|never use|from now on|let's go with|i decided|we're using|switch to|we agreed" \
+        | { grep -iE "actually|\bno,|wrong|incorrect|not right|stop doing|i meant|i prefer|always use|never use|from now on|let's go with|i decided|we're using|switch to|we agreed" || true; } \
         | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
         | awk 'length > 0 && length < 300' \
         | head -15
@@ -131,7 +131,11 @@ harvest_compact_summary() {
     local t="$1"
     [[ -f "$t" ]] || return 0
     local s
-    s=$(grep '"isCompactSummary"' "$t" 2>/dev/null | tail -1 \
+    # `|| true` on the grep: no isCompactSummary line is a legitimate empty result,
+    # not an error. Without it the no-match rc=1 trips `set -e`/`pipefail` and the
+    # assignment aborts the function mid-way (the caller assembles this inside a
+    # brace group under `set -e`, so an abort would orphan a half-written handoff).
+    s=$( { grep '"isCompactSummary"' "$t" 2>/dev/null || true; } | tail -1 \
         | jq -r '(.message.content // .content)
                  | if type=="string" then .
                    elif type=="array" then (.[] | if .type=="text" then .text else empty end)
@@ -140,6 +144,7 @@ harvest_compact_summary() {
     # Guarantee exactly one trailing newline so the START/END markers always sit on
     # their own lines (head -c can truncate mid-line without one); empty => nothing.
     [[ -n "$s" ]] && printf '%s\n' "$s"
+    return 0
 }
 
 # Assemble the deterministic handoff scratch. For source=handoff the narrative is
@@ -214,6 +219,12 @@ build_deterministic_handoff() {
     } > "$OUT"
 
     rm -f "$win"
+    # The file is always fully assembled above; the trailing harvest helper's exit
+    # code (grep/jq return non-zero on a legitimately-empty section, e.g. no tagged
+    # decisions) must not leak as the function's status. The unguarded /handoff CLI
+    # path runs under `set -e`, where a non-zero return would spuriously fail an
+    # otherwise-valid build. Assembly succeeded — return success explicitly.
+    return 0
 }
 
 # Finalise a handoff: enforce the empty/thin guard for manual handoffs, stamp
