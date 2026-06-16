@@ -63,6 +63,16 @@ assert_contains "decisions: string-form correction" "switch to the deterministic
 assert_contains "decisions: array-text correction"  "threshold should be 150k" "$DEC"
 assert_not_contains "decisions: drops tool_result"  "ignore me" "$DEC"
 
+# harvest_todos: pending/in-progress items from the LAST TodoWrite; drops completed
+TODOS="$(window_transcript "$FIX" | harvest_todos)"
+assert_contains "todos keeps pending"        "wire the clear branch" "$TODOS"
+assert_contains "todos keeps in_progress"    "benchmark the token read" "$TODOS"
+assert_not_contains "todos drops completed"  "old finished thing" "$TODOS"
+
+# read_live_tokens: sum of the LAST usage-bearing assistant entry (150000+2000+3000)
+TOK="$(read_live_tokens "$FIX")"
+assert_eq "live tokens = last usage entry sum" "155000" "$TOK"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

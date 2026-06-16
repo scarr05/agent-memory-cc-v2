@@ -79,4 +79,35 @@ harvest_decisions() {
         | head -15
 }
 
+# Open TODOs from the LAST TodoWrite this work unit (later arrays supersede
+# earlier ones). Reads windowed JSONL on stdin. Drops completed items.
+harvest_todos() {
+    local last
+    last=$(jq -c 'select(.type=="assistant") | .message.content[]?
+                  | select(.type=="tool_use" and .name=="TodoWrite") | .input.todos' 2>/dev/null \
+           | tail -1 || true)
+    [[ -n "$last" ]] || return 0
+    printf '%s' "$last" \
+        | jq -r '.[] | select(.status != "completed") | "- [ ] " + (.content // .activeForm // "task")' 2>/dev/null || true
+}
+
+# Live context size = the LAST usage-bearing assistant entry's
+# input + cache_read + cache_creation. tail -1 of a transcript is often a
+# type:system line with no usage, so scan BACK (bounded to the last 100 lines —
+# the last usage entry is always within a few of the tail) and take the first hit.
+read_live_tokens() {
+    local t="$1"
+    [[ -f "$t" ]] || { echo 0; return 0; }
+    local line u
+    while IFS= read -r line; do
+        u=$(printf '%s' "$line" | jq -r '
+            (.message.usage // empty)
+            | if . == "" then empty
+              else ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
+              end' 2>/dev/null || true)
+        if [[ "$u" =~ ^[0-9]+$ ]] && [[ "$u" -gt 0 ]]; then echo "$u"; return 0; fi
+    done < <(tail -n 100 "$t" | tac)
+    echo 0
+}
+
 # ---- CLI dispatcher (added in Task 6) ----
