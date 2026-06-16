@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # stop-memory.sh — Stop hook for memory system
 # Tracks message count and nudges for /memory-sync on significant sessions.
-# Fires on EVERY response — keep it to a state-file read, one awk pass, and a
-# conditional printf. No jq, no date -d. (<=50ms is unreachable on Git Bash; the
-# harness WARNs over 50ms and FAILs only on a >2x regression.)
+# Fires on EVERY response. Hot-path design: state-file read, one awk pass,
+# conditional printf. One jq parse of the tiny Stop stdin payload runs per turn
+# to extract transcript_path (needed to keep the path breadcrumb current and to
+# check for the handoff token nudge). The expensive token scan is gated behind
+# a message-count floor (>= 8 exchanges) and a once-per-session flag, so jq
+# only reads the transcript file at most a few times per session, never on the
+# common short turn. (<=50ms is unreachable on Git Bash; the harness WARNs over
+# 50ms and FAILs only on a >2x regression.)
 
 set -euo pipefail
 
 STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
 STATE_FILE=".claude/memory-state.json"
+
+LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
+else
+    HANDOFF_LIB=0
+fi
+# Stop receives { transcript_path } on stdin; capture it for the token nudge.
+STDIN_JSON=$(cat || true)
+TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
 # --- Fast slug detection: state file first (sed, no jq), then minimal fallback ---
 SLUG=""
@@ -89,6 +105,38 @@ if [[ -s "$META_FILE.tmp" ]]; then
     mv "$META_FILE.tmp" "$META_FILE" 2>/dev/null || true
 else
     rm -f "$META_FILE.tmp" 2>/dev/null || true
+fi
+
+# Refresh the transcript breadcrumb for /handoff every turn (tiny, unconditional —
+# keeps the authoritative path current as the session grows).
+if [[ -n "${TRANSCRIPT:-}" ]]; then
+    printf '%s\n' "$TRANSCRIPT" > "$PROJECT_DIR/.transcript-path" 2>/dev/null || true
+fi
+
+# --- Handoff token nudge (off hot path) ---
+# Cheap pre-checks gate the expensive transcript scan: skip entirely until the
+# session is plausibly large (>= 8 exchanges) and only fire once. 150k tokens is
+# implausible before a handful of exchanges, so the jq scan runs at most a few
+# times per session, never on the common short turn.
+MSG_NOW=$(sed -n 's/^message_count=\([0-9]*\).*/\1/p' "$META_FILE" | head -1); MSG_NOW="${MSG_NOW:-0}"
+if [[ "$HANDOFF_LIB" == "1" ]] && [[ -n "$TRANSCRIPT" ]] \
+   && [[ "$MSG_NOW" -ge 8 ]] && ! grep -q '^handoff_nudge_sent=true' "$META_FILE" 2>/dev/null; then
+    # Threshold: project settings -> global settings -> 150000 default.
+    THRESH=$(jq -r '.memory.handoffTokenThreshold // empty' .claude/settings.json 2>/dev/null || true)
+    [[ -z "$THRESH" ]] && THRESH=$(jq -r '.memory.handoffTokenThreshold // empty' "$HOME/.claude/settings.json" 2>/dev/null || true)
+    [[ "$THRESH" =~ ^[0-9]+$ ]] || THRESH=150000
+    LIVE=$(read_live_tokens "$TRANSCRIPT")
+    if [[ "$LIVE" =~ ^[0-9]+$ ]] && [[ "$LIVE" -ge "$THRESH" ]]; then
+        # Upsert the once-per-session flag (replace if present, else append) so it
+        # can never accumulate duplicate lines across runs.
+        if grep -q '^handoff_nudge_sent=' "$META_FILE" 2>/dev/null; then
+            sed -i 's/^handoff_nudge_sent=.*/handoff_nudge_sent=true/' "$META_FILE"
+        else
+            echo "handoff_nudge_sent=true" >> "$META_FILE"
+        fi
+        HANDOFF_MSG="~$((LIVE / 1000))k tokens — consider /handoff then /clear to continue in a fresh session."
+        if [[ -n "$NUDGE" ]]; then NUDGE="$NUDGE | $HANDOFF_MSG"; else NUDGE="$HANDOFF_MSG"; fi
+    fi
 fi
 
 # Output nudge if significant. systemMessage = user-visible reminder; never block

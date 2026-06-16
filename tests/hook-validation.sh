@@ -497,6 +497,49 @@ else
         fail "Seed-30 (missed fire): nudge30_sent flag not recorded in meta"
     fi
 
+    # --- Token-nudge cases ---
+    # The fixture transcript-windowed.jsonl has a last usage entry summing to
+    # 155000 tokens (input:150000 + cache_read:2000 + cache_creation:3000), which
+    # exceeds the 150000 default threshold. The path MUST be absolute because the
+    # hook runs with an arbitrary CWD.
+    TOKEN_FIXTURE="$PWD/tests/fixtures/transcript-windowed.jsonl"
+    TOKEN_STDIN="{\"transcript_path\":\"$TOKEN_FIXTURE\"}"
+
+    # Case A: Token-nudge fires at threshold.
+    # seed count=8 so hook increments to 9 (>= 8 floor). No handoff_nudge_sent yet.
+    seed_meta 8
+    TOKENA_OUTPUT=$(printf '%s' "$TOKEN_STDIN" | bash "$STOP_HOOK" 2>/dev/null || true)
+    TOKENA_MSG=$(echo "$TOKENA_OUTPUT" | jq -r '.systemMessage // empty' 2>/dev/null || true)
+    if echo "$TOKENA_MSG" | grep -q '/handoff then /clear'; then
+        pass "Token-nudge: fires at threshold (155k >= 150k)"
+    else
+        fail "Token-nudge: expected /handoff then /clear in systemMessage, got: $(echo "$TOKENA_OUTPUT" | head -c 200)"
+    fi
+    if grep -q '^handoff_nudge_sent=true' "$META_FILE" 2>/dev/null; then
+        pass "Token-nudge: handoff_nudge_sent=true written to meta"
+    else
+        fail "Token-nudge: handoff_nudge_sent=true not found in meta"
+    fi
+
+    # Case B: Once-only — second run must NOT re-fire (flag already set).
+    TOKENB_OUTPUT=$(printf '%s' "$TOKEN_STDIN" | bash "$STOP_HOOK" 2>/dev/null || true)
+    TOKENB_MSG=$(echo "$TOKENB_OUTPUT" | jq -r '.systemMessage // empty' 2>/dev/null || true)
+    if echo "$TOKENB_MSG" | grep -q '/handoff then /clear'; then
+        fail "Token-nudge once-only: nudge re-fired after flag was set"
+    else
+        pass "Token-nudge once-only: nudge suppressed on second run"
+    fi
+
+    # Case C: Floor gate — count too low (seed=2, increments to 3 < 8 floor).
+    seed_meta 2
+    TOKENC_OUTPUT=$(printf '%s' "$TOKEN_STDIN" | bash "$STOP_HOOK" 2>/dev/null || true)
+    TOKENC_MSG=$(echo "$TOKENC_OUTPUT" | jq -r '.systemMessage // empty' 2>/dev/null || true)
+    if echo "$TOKENC_MSG" | grep -q '/handoff then /clear'; then
+        fail "Token-nudge floor gate: fired at count=3 (below 8 floor)"
+    else
+        pass "Token-nudge floor gate: suppressed below message floor"
+    fi
+
     # Restore original meta
     if [[ -n "$META_BACKUP" ]]; then
         printf '%s\n' "$META_BACKUP" > "$META_FILE"
