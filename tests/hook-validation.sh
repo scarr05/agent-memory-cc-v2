@@ -583,6 +583,33 @@ else
         fail "Short session should not write .unsynced"
     fi
 
+    # Case 5: reason=clear + transcript, no existing handoff -> clear-fallback armed.
+    SE_HANDOFF="$SE_STAGING/handoff.md"
+    SE_HANDOFF_CONSUMED="$SE_STAGING/handoff.consumed.md"
+    rm -f "$SE_HANDOFF" "$SE_HANDOFF_CONSUMED"
+    se_seed_meta 12
+    echo "{\"reason\":\"clear\",\"transcript_path\":\"$PWD/tests/fixtures/transcript-windowed.jsonl\"}" \
+        | bash "$SE_HOOK" 2>/dev/null || true
+    if [[ -f "$SE_HANDOFF" ]] && grep -q 'clear-fallback' "$SE_HANDOFF"; then
+        pass "reason=clear with transcript arms clear-fallback handoff"
+    else
+        fail "Expected clear-fallback handoff at $SE_HANDOFF; got: $(cat "$SE_HANDOFF" 2>/dev/null | head -c 200)"
+    fi
+
+    # Case 6: reason=clear + transcript, existing manual handoff -> NOT clobbered.
+    printf -- '---\nsource: handoff\n---\nMANUAL_HANDOFF_TOKEN\n' > "$SE_HANDOFF"
+    se_seed_meta 12
+    echo "{\"reason\":\"clear\",\"transcript_path\":\"$PWD/tests/fixtures/transcript-windowed.jsonl\"}" \
+        | bash "$SE_HOOK" 2>/dev/null || true
+    if grep -q 'MANUAL_HANDOFF_TOKEN' "$SE_HANDOFF" 2>/dev/null; then
+        pass "reason=clear does not clobber an existing manual handoff"
+    else
+        fail "Existing manual handoff was clobbered; got: $(cat "$SE_HANDOFF" 2>/dev/null | head -c 200)"
+    fi
+
+    # Clean up handoff scratch files.
+    rm -f "$SE_HANDOFF" "$SE_HANDOFF_CONSUMED"
+
     # Timing — WARN only, budget 100ms.
     if [[ "$SE_MS" -le 100 ]]; then
         pass "SessionEnd ${SE_MS}ms within 100ms budget"
