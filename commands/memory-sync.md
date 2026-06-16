@@ -51,6 +51,31 @@ search_notes(query="<project-name>", searchContent=true)
 
 Search `5 Agent Memory/sessions/` for recent sessions on the same project. Note any continuity (is this a continuation of prior work?).
 
+### Step 2.5: Consolidate Handoff Chain (Dedup)
+
+A long effort spans several clears, each producing a handoff stamped with `supersedes` pointing at the prior one. To avoid writing N near-duplicate session notes for one effort:
+
+1. Read the current scratch pair if present:
+
+```bash
+cat ~/.claude/memory-staging/<slug>/handoff.md 2>/dev/null
+cat ~/.claude/memory-staging/<slug>/handoff.consumed.md 2>/dev/null
+```
+
+2. Extract this effort's **fingerprint**: the `## Files Touched (this work unit)` list plus the `## Tagged Decisions / Corrections` lines.
+
+3. Search the vault for an existing session note from the **same effort** (overlapping file list — the same files touched across consecutive sessions signal one continuous effort):
+
+```
+search_notes(query="<2-3 distinctive file basenames from the fingerprint>", searchContent=true)
+```
+
+4. **If an overlapping recent session note exists** (same project, file-list overlap, `resumable: true`): UPDATE it in place — append new Progress/Decisions/Open Items — instead of creating a new note. Set its `status` to reflect the latest state.
+
+5. **If none overlaps:** write the session note as described in Step 3 below.
+
+This collapses redundancy by construction: each `/handoff` overwrites the prior scratch (no stacking), and consolidation matches against the vault before writing. If a `supersedes` stamp is missing, you may produce one duplicate — `--dream` backstops that later.
+
 ### Step 3: Write Session Note
 
 Write to: `5 Agent Memory/sessions/by-project/<project-slug>/<date>-<topic>.md`
@@ -138,31 +163,6 @@ write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <c
 
 4. Update the `modified` date in `_decisions.md` frontmatter using `update_frontmatter`.
 
-### Step 3.7: Consolidate Handoff Chain (Dedup)
-
-A long effort spans several clears, each producing a handoff stamped with `supersedes` pointing at the prior one. To avoid writing N near-duplicate session notes for one effort:
-
-1. Read the current scratch pair if present:
-
-```bash
-cat ~/.claude/memory-staging/<slug>/handoff.md 2>/dev/null
-cat ~/.claude/memory-staging/<slug>/handoff.consumed.md 2>/dev/null
-```
-
-2. Extract this effort's **fingerprint**: the `## Files Touched` list plus the `## Tagged Decisions / Corrections` lines.
-
-3. Search the vault for an existing session note from the **same effort** (overlapping file list — the same files touched across consecutive sessions signal one continuous effort):
-
-```
-search_notes(query="<2-3 distinctive file basenames from the fingerprint>", searchContent=true)
-```
-
-4. **If an overlapping recent session note exists** (same project, file-list overlap, `resumable: true`): UPDATE it in place — append new Progress/Decisions/Open Items — instead of creating a new note. Set its `status` to reflect the latest state.
-
-5. **If none overlaps:** proceed to Step 3 normally (write a fresh session note).
-
-This collapses redundancy by construction: each `/handoff` overwrites the prior scratch (no stacking), and consolidation matches against the vault before writing. If a `supersedes` stamp is missing, you may produce one duplicate — `--dream` backstops that later.
-
 ### Step 4: Pattern Detection
 
 Review the session for recurring patterns. Check against existing learnings:
@@ -188,7 +188,7 @@ If you spot an EXISTING learning that should be updated:
 search_notes(query="<key phrase from the correction>", searchContent=true)
 ```
 
-If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it live whenever a future prompt touches that topic. A correction counts as "new" when the current handoff's corrections differ from the prior `.consumed` handoff's.
+If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it in future sessions whenever a prompt touches that topic (its index is rebuilt at SessionStart). A correction counts as "new" when the current handoff's corrections differ from the prior `.consumed` handoff's.
 
 ### Step 5: Update Project Index
 
@@ -209,7 +209,7 @@ Check `~/.claude/memory-staging/<slug>/` for:
 ```bash
 rm -f ~/.claude/memory-staging/<slug>/handoff.md ~/.claude/memory-staging/<slug>/handoff.consumed.md
 META=~/.claude/memory-staging/<slug>/.session-meta
-sed -i 's/message_count=[0-9]*/message_count=0/' "$META"
+sed -i 's/message_count=[0-9]*/message_count=0/' "$META" || true
 
 # Mark synced (SessionEnd reads this) and clear any stale unsynced marker. Upsert
 # the flag (replace if present, else append) so repeat syncs never pile up
