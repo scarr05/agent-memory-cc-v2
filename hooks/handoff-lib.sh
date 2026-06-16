@@ -60,4 +60,23 @@ harvest_git() {
     git log --oneline -3 2>/dev/null | sed 's/^/- /' || true
 }
 
+# Tagged decisions/corrections from user messages this work unit. Reads windowed
+# JSONL on stdin. Handles polymorphic content (bare string | [text] | [tool_result])
+# — tool_result-only messages yield nothing. Strips a leading slash-command token
+# so "/handoff actually do X" still surfaces "actually do X".
+harvest_decisions() {
+    jq -r 'select(.type=="user") | .message.content
+           | if type=="string" then .
+             elif type=="array" then (.[]
+                 | if type=="string" then .
+                   elif (.type=="text") then .text
+                   else empty end)
+             else empty end' 2>/dev/null \
+        | sed -E 's#^/[a-z][a-z-]* ##' \
+        | grep -iE "actually|no,|wrong|incorrect|not right|stop doing|i meant|i prefer|always use|never use|from now on|let's go with|i decided|we're using|switch to|we agreed" \
+        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+        | awk 'length > 0 && length < 300' \
+        | head -15
+}
+
 # ---- CLI dispatcher (added in Task 6) ----

@@ -56,6 +56,13 @@ assert_contains "most-frequent file is the lib" "/src/handoff-lib.sh" "$TOPFILE"
 GIT="$(harvest_git)"
 assert_contains "git emits Branch" "Branch:" "$GIT"
 
+# harvest_decisions: tags correction/decision language from BOTH string and
+# [{type:text}] user messages; ignores tool_result-only messages.
+DEC="$(window_transcript "$FIX" | harvest_decisions)"
+assert_contains "decisions: string-form correction" "switch to the deterministic harvester" "$DEC"
+assert_contains "decisions: array-text correction"  "threshold should be 150k" "$DEC"
+assert_not_contains "decisions: drops tool_result"  "ignore me" "$DEC"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
