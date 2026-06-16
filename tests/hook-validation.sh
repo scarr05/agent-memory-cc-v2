@@ -849,20 +849,19 @@ if [[ ! -f "$RESULTS_FILE" ]]; then
 
 ## Tier 1 — Hook Validation
 
-| Project | Slug | SS chars | SS cold ms | SS warm ms | PC stub bytes | PC ms | Stop ms | SE ms | UPS ms | Result |
-|---------|------|----------|------------|------------|---------------|-------|---------|-------|--------|--------|
+| Project | Slug | SS chars | SS cold ms | SS warm ms | PC ms | Stop ms | SE ms | UPS ms | Result |
+|---------|------|----------|------------|------------|-------|---------|-------|--------|--------|
 EOF
 fi
 
 # Append row (SS_COLD_MS / SS_WARM_MS / STOP_MS already defaulted in the
 # regression-guard block above; default only the rest here)
 SS_CHARS="${SS_CHARS:-0}"
-CP_SIZE="${CP_SIZE:-0}"
 PC_MS="${PC_MS:-0}"
 SE_MS="${SE_MS:-0}"
 UPS_MS="${UPS_MS:-0}"
 
-echo "| $PROJECT_NAME | ${SS_DETECTED_SLUG:-unknown} | $SS_CHARS | $SS_COLD_MS | $SS_WARM_MS | $CP_SIZE | $PC_MS | $STOP_MS | $SE_MS | $UPS_MS | $OVERALL |" >> "$RESULTS_FILE"
+echo "| $PROJECT_NAME | ${SS_DETECTED_SLUG:-unknown} | $SS_CHARS | $SS_COLD_MS | $SS_WARM_MS | $PC_MS | $STOP_MS | $SE_MS | $UPS_MS | $OVERALL |" >> "$RESULTS_FILE"
 
 echo "Results appended to: $RESULTS_FILE"
 
