@@ -145,6 +145,11 @@ SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
 [[ -z "$SLUG" ]] && SLUG="unknown"
 DETECTED_VIA="$_DETECTED_VIA"
 AREA=$(detect_area)
+# Clamp AREA to a safe label charset. It reaches the memory-state.json heredoc and
+# .session-meta unquoted, so a crafted `memory:area=` value containing " or , could
+# corrupt that JSON (breaking jq-based slug reads on the next run). Path traversal is
+# already blocked by the SLUG clamp above — this is JSON hygiene + defence in depth.
+AREA=$(printf '%s' "$AREA" | tr -dc 'A-Za-z0-9 _-' | head -c 64)
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 
 # Authoritative transcript breadcrumb for /handoff (CLAUDE_SESSION_ID is unset in

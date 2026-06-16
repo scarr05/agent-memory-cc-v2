@@ -135,11 +135,17 @@ harvest_compact_summary() {
     # not an error. Without it the no-match rc=1 trips `set -e`/`pipefail` and the
     # assignment aborts the function mid-way (the caller assembles this inside a
     # brace group under `set -e`, so an abort would orphan a half-written handoff).
+    # Neutralise any HANDOFF marker line embedded in the summary before it is placed
+    # inside the START/END block. CC's summary is free LLM text (and, for this very
+    # project, often quotes these markers); a line equal to ...:END --> would close
+    # the block early and a following ...:START --> would re-open it, so extract_block
+    # would mis-scope the narrative. Defanging the tokens keeps the summary one block.
     s=$( { grep '"isCompactSummary"' "$t" 2>/dev/null || true; } | tail -1 \
         | jq -r '(.message.content // .content)
                  | if type=="string" then .
                    elif type=="array" then (.[] | if .type=="text" then .text else empty end)
                    else empty end' 2>/dev/null \
+        | sed -E 's/<!-- HANDOFF:[A-Za-z]+:(START|END) -->/[handoff-marker]/g' \
         | head -c 4000)
     # Guarantee exactly one trailing newline so the START/END markers always sit on
     # their own lines (head -c can truncate mid-line without one); empty => nothing.
