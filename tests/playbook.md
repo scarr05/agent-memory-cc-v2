@@ -108,7 +108,7 @@ Run before merging the handoff workflow. Gates 1–2 are scripted; 3–4 are liv
 > HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" "$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' .claude/CLAUDE.md | head -1)"
 > ```
 >
-> Expect `39/39 passed — PASS`. Omitting `HOOKS_DIR=./hooks` runs the installed hooks instead and reports false failures until you redeploy them.
+> Expect a `PASS` summary with `FAIL=0` (`39/39` with the Obsidian CLI present, per the Prerequisites above; one fewer when the optional cold-timing check is skipped because the CLI is unavailable). Omitting `HOOKS_DIR=./hooks` runs the installed hooks instead and reports false failures until you redeploy them.
 
 ### Gate 1 — Transcript windowing (scripted)
 ```bash
