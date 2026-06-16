@@ -39,7 +39,12 @@ mkdir -p "$STAGING"
 #   1. .transcript-path breadcrumb (authoritative for a single active session)
 #   2. $CLAUDE_SESSION_ID-derived path (only if the env var is ever populated)
 #   3. newest *.jsonl
-ENCODED=$(printf '%s' "$PWD" | sed 's#[/\\:]#-#g')
+# Claude Code encodes the projects dir from the OS-native path. On Windows git bash
+# $PWD is POSIX-form (/c/Users/...), which mis-encodes (-c-Users-... vs CC's
+# C--Users-...) and breaks PROJDIR — defeating both the newest-wins fallback AND the
+# ambiguity gate. cygpath -w yields the native path on Windows; on macOS/Linux cygpath
+# is absent and the fallback keeps $PWD, which CC already encodes directly.
+ENCODED=$(printf '%s' "$(cygpath -w "$PWD" 2>/dev/null || printf '%s' "$PWD")" | sed 's#[/\\:]#-#g')
 PROJDIR="$HOME/.claude/projects/$ENCODED"
 TRANSCRIPT=""; AMBIGUOUS=0
 RECENT=$(find "$PROJDIR" -maxdepth 1 -name '*.jsonl' -mmin -2 2>/dev/null | wc -l | tr -d ' ')
