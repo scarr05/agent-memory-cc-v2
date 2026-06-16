@@ -1,5 +1,7 @@
 # Setup Guide — Hooks-Enforced Memory System
 
+> **Deprecated — this is the v2 guide.** It documents the original three-hook system, including the retired pre-compaction checkpoint-stub mechanism. For the current install (v4: six hooks, the `/handoff` → `/clear` workflow, and the plugin path) see **[setup-guide-v4.md](setup-guide-v4.md)**.
+
 ## What You're Installing
 
 ### Hooks (deterministic enforcement)

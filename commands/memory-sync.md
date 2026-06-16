@@ -1,16 +1,15 @@
 ---
 description: "Consolidate session memory into Obsidian vault. Writes a structured session note, proposes learnings, optionally ingests auto-memory. Use at end of significant sessions or when switching context."
-user-invocable: true
 allowed-tools:
-  - "obsidian:read_note"
-  - "obsidian:write_note"
-  - "obsidian:search_notes"
-  - "obsidian:get_frontmatter"
-  - "obsidian:list_directory"
-  - "obsidian:update_frontmatter"
-  - "obsidian:patch_note"
-  - "obsidian:read_multiple_notes"
-  - "obsidian:get_notes_info"
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__write_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__update_frontmatter"
+  - "mcp__obsidian__patch_note"
+  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__get_notes_info"
   - "Agent"
   - "Bash"
   - "Read"
@@ -51,6 +50,31 @@ search_notes(query="<project-name>", searchContent=true)
 ```
 
 Search `5 Agent Memory/sessions/` for recent sessions on the same project. Note any continuity (is this a continuation of prior work?).
+
+### Step 2.5: Consolidate Handoff Chain (Dedup)
+
+A long effort spans several clears, each producing a handoff stamped with `supersedes` pointing at the prior one. To avoid writing N near-duplicate session notes for one effort:
+
+1. Read the current scratch pair if present:
+
+```bash
+cat ~/.claude/memory-staging/<slug>/handoff.md 2>/dev/null
+cat ~/.claude/memory-staging/<slug>/handoff.consumed.md 2>/dev/null
+```
+
+2. Extract this effort's **fingerprint**: the `## Files Touched (this work unit)` list plus the `## Tagged Decisions / Corrections` lines.
+
+3. Search the vault for an existing session note from the **same effort** (overlapping file list — the same files touched across consecutive sessions signal one continuous effort):
+
+```
+search_notes(query="<2-3 distinctive file basenames from the fingerprint>", searchContent=true)
+```
+
+4. **If an overlapping recent session note exists** (same project, file-list overlap, `resumable: true`): UPDATE it in place — append new Progress/Decisions/Open Items — instead of creating a new note. Set its `status` to reflect the latest state.
+
+5. **If none overlaps:** write the session note as described in Step 3 below.
+
+This collapses redundancy by construction: each `/handoff` overwrites the prior scratch (no stacking), and consolidation matches against the vault before writing. If a `supersedes` stamp is missing, you may produce one duplicate — `--dream` backstops that later.
 
 ### Step 3: Write Session Note
 
@@ -158,6 +182,14 @@ If you spot an EXISTING learning that should be updated:
 - Show the user the current version and proposed change
 - Update after approval
 
+**Direction-change corrections (from the handoff scratch):** the handoff's `## Tagged Decisions / Corrections` section is non-empty only when the direction shifted this effort. For each line there that is not already in `5 Agent Memory/learnings/corrections/`:
+
+```
+search_notes(query="<key phrase from the correction>", searchContent=true)
+```
+
+If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it in future sessions whenever a prompt touches that topic (its index is rebuilt at SessionStart). A correction counts as "new" when the current handoff's corrections differ from the prior `.consumed` handoff's.
+
 ### Step 5: Update Project Index
 
 Read `5 Agent Memory/project-index.md` and update the relevant project row with:
@@ -170,13 +202,27 @@ If the project isn't in the index, add it.
 
 Check `~/.claude/memory-staging/<slug>/` for:
 
-1. **Checkpoint files** — if any exist, their content should now be superseded by the session note. Delete them.
+1. **Handoff scratch** — after the session note is written, `handoff.md` and `handoff.consumed.md` are superseded by the vault note. Delete them.
 2. **Session meta** — reset `message_count=0` for the next session.
+3. **Synced flag** — record that this session has been synced and clear any stale `.unsynced` marker.
 
 ```bash
-rm -f ~/.claude/memory-staging/<slug>/checkpoint-*.md
-sed -i 's/message_count=[0-9]*/message_count=0/' ~/.claude/memory-staging/<slug>/.session-meta
+rm -f ~/.claude/memory-staging/<slug>/handoff.md ~/.claude/memory-staging/<slug>/handoff.consumed.md
+META=~/.claude/memory-staging/<slug>/.session-meta
+sed -i 's/message_count=[0-9]*/message_count=0/' "$META" || true
+
+# Mark synced (SessionEnd reads this) and clear any stale unsynced marker. Upsert
+# the flag (replace if present, else append) so repeat syncs never pile up
+# duplicate synced= lines.
+if grep -q '^synced=' "$META" 2>/dev/null; then
+    sed -i 's/^synced=.*/synced=true/' "$META"
+else
+    echo "synced=true" >> "$META"
+fi
+rm -f ~/.claude/memory-staging/<slug>/.unsynced
 ```
+
+A fresh SessionStart resets `.session-meta`, so `synced=true` applies only to the current session.
 
 ### Step 7: Confirm
 

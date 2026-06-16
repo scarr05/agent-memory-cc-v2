@@ -18,11 +18,16 @@ Hooks cannot call MCP directly. They write to local staging files and inject `ad
 
 ### Hook Scripts
 
-| Script | Event | Purpose | Target |
+Six hooks fire on Claude Code lifecycle events:
+
+| Script | Event | Purpose | Budget |
 |--------|-------|---------|--------|
-| `session-start.sh` | SessionStart | Detect project slug, flag pending checkpoints, detect dream-pending, inject context | ~100ms |
-| `pre-compact.sh` | PreCompact | Create checkpoint stub before context compaction | ~200ms |
-| `stop-memory.sh` | Stop | Increment message counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | <50ms |
+| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag a pending handoff + unsynced sessions, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
+| `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads | — |
+| `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired) | ≤100ms |
+| `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | ≤50ms |
+| `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` | ≤100ms |
+| `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic | ≤100ms |
 
 ### Slash Commands
 
@@ -30,6 +35,7 @@ Hooks cannot call MCP directly. They write to local staging files and inject `ad
 |------|---------|---------|
 | `memory-init.md` | `/memory-init` | One-time project setup: detect stack, create CLAUDE.md metadata, set up Obsidian folders, load prior context. Includes decisions log setup (Phase 4.5) and optional codebase analysis (Phase 4.6) |
 | `memory-sync.md` | `/memory-sync` | End-of-session: write session note, append to decisions log, propose learnings, clean staging. Supports `--dream`, `--ingest`, `--tidy`, `--status` flags |
+| `handoff.md` | `/handoff` | Capture the current work unit into a handoff scratch file before `/clear`; the next session auto-loads it |
 | `decision.md` | `/decision` | Ad-hoc decision logging to `_decisions.md` without full session sync |
 
 ### Project Slug Detection (priority order)
@@ -42,24 +48,26 @@ Hooks cannot call MCP directly. They write to local staging files and inject `ad
 
 The slug is the primary key for all memory operations — it determines staging paths, Obsidian folder structure, and context loading.
 
-### Hook Output Format
+### Hook Output Schemas
 
-Hooks communicate with Claude Code via JSON on stdout:
-```json
-{
-  "systemMessage": "<markdown context string>"
-}
-```
+Each hook emits the channel Claude Code actually reads for that event (corrected in v4 — the old "everything is `systemMessage`" form was never received by Claude):
 
-The Stop hook uses `"reason"` instead of `systemMessage` for nudge messages.
+| Hook | Channel |
+|------|---------|
+| SessionStart, UserPromptSubmit | `hookSpecificOutput.additionalContext` (a string Claude sees); plain stdout is a documented fallback via `MEMORY_HOOK_PLAINTEXT=1` |
+| Stop | `systemMessage` (shown to the user, not Claude) — the correct nudge channel |
+| PreToolUse (read-once) | `hookSpecificOutput.permissionDecision` (`allow` / `deny` / `ask`) |
+| PreCompact | emits nothing — clears the read-once cache only; the post-compaction handoff comes from SessionStart with `source=compact` |
+| SessionEnd | side-effect only (writes `.unsynced`); receives `reason` on stdin, cannot inject |
 
 ## Installation
 
-Files are deployed to `~/.claude/` — see `docs/setup-guide-v2.md` for full steps:
-- Hook scripts from `hooks/` → `~/.claude/hooks/`
+Install as a Claude Code plugin (`claude --plugin-dir <repo>`) or copy files into `~/.claude/` manually — see `docs/setup-guide-v4.md` for both paths. The manual copy, in short:
+- Hook scripts from `hooks/` → `~/.claude/hooks/` (including `read-once/`)
 - `config/settings.json` → `~/.claude/settings.json` (merge if existing)
 - `config/global-claude-md-v2.md` → `~/.claude/CLAUDE.md`
 - Slash command `.md` files from `commands/` → `~/.claude/commands/`
+- Subagent `.md` files from `agents/` → `~/.claude/agents/`
 
 ### Verification
 
@@ -73,9 +81,13 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 
 ## Key Files
 
+- `.claude-plugin/plugin.json` — Plugin manifest (name, version, description)
+- `hooks/hooks.json` — Plugin hook registration (mirrors `config/settings.json` with `${CLAUDE_PLUGIN_ROOT}` paths)
+- `hooks/handoff-lib.sh` — Shared bash library holding handoff read/write functions; sourced by hooks, not registered as a hook event
 - `config/global-claude-md-v2.md` — Global CLAUDE.md with preferences, memory rules, MCP tool list, and vault structure
+- `commands/handoff.md` — `/handoff` command: captures the current work unit into a handoff scratch file before `/clear`
 - `docs/hooks-architecture.md` — System design document explaining the hook-MCP bridge pattern, detection logic, and interaction flows
-- `docs/setup-guide-v2.md` — Step-by-step installation and daily workflow guide
+- `docs/setup-guide-v4.md` — v4 installation (plugin + manual); `docs/setup-guide-v2.md` is the older manual-only guide
 - `config/settings.json` — Hook registration config for `~/.claude/settings.json`
 
 ## Conventions
@@ -85,3 +97,12 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - Memory metadata in project CLAUDE.md files uses HTML comments (`<!-- memory:key=value -->`) for invisibility in rendered markdown
 - Obsidian notes must always include YAML frontmatter
 - British English spelling throughout (organisation, colour, behaviour)
+
+## Testing
+
+Semi-automated test suite in `tests/`:
+- **Tier 1 (scripted):** `bash tests/hook-validation.sh /path/to/project [expected-slug]` — validates hook outputs and captures metrics
+- **Tier 2-3 (manual):** Follow `tests/playbook.md` for session-level testing
+- **Results:** `tests/results/baseline-YYYY-MM-DD.md` (gitignored)
+
+See `docs/superpowers/specs/2026-04-01-e2e-testing-design.md` for the full design.

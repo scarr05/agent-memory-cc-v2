@@ -21,13 +21,13 @@ DISABLED="${READ_ONCE_DISABLED:-0}"
 
 # Dependency check — jq is required for JSON parsing and output
 if ! command -v jq &>/dev/null; then
-    echo '{"decision":"allow","reason":"read-once: jq is not installed. Install jq to enable redundant read prevention."}'
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-once: jq is not installed. Install jq to enable redundant read prevention."}}'
     exit 0
 fi
 
 # Validate numeric config
 if ! [[ "$TTL" =~ ^[0-9]+$ ]] || ! [[ "$DIFF_MAX" =~ ^[0-9]+$ ]]; then
-    echo '{"decision":"allow","reason":"read-once: TTL or DIFF_MAX is not a valid number. Check READ_ONCE_TTL and READ_ONCE_DIFF_MAX."}'
+    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-once: TTL or DIFF_MAX is not a valid number. Check READ_ONCE_TTL and READ_ONCE_DIFF_MAX."}}'
     exit 0
 fi
 
@@ -109,11 +109,11 @@ if [[ -f "$CACHE_FILE" ]]; then
 
         if [[ "$MODE" == "deny" ]]; then
             jq -n --arg path "$FILE_PATH" --argjson mins "$MINS_AGO" \
-                '{decision: "block", reason: ("read-once: already in context (read " + ($mins | tostring) + "m ago, unchanged). File: " + $path)}'
+                '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ("read-once: already in context (read " + ($mins | tostring) + "m ago, unchanged). File: " + $path)}}'
             exit 0
         else
             jq -n --arg path "$FILE_PATH" --argjson mins "$MINS_AGO" \
-                '{decision: "allow", reason: ("read-once: this file was already read " + ($mins | tostring) + "m ago and hasn'\''t changed. It should still be in your context. File: " + $path)}'
+                '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: ("read-once: this file was already read " + ($mins | tostring) + "m ago and hasn'\''t changed. It should still be in your context. File: " + $path)}}'
             exit 0
         fi
     fi
@@ -131,7 +131,7 @@ if [[ -f "$CACHE_FILE" ]]; then
 
                 TRIMMED_DIFF=$(echo "$DIFF_OUTPUT" | head -"$DIFF_MAX")
                 jq -n --arg lines "$DIFF_LINES" --arg diff "$TRIMMED_DIFF" \
-                    '{decision: "allow", reason: ("read-once: file changed since last read (" + $lines + " lines differ). Diff:\n" + $diff)}'
+                    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: ("read-once: file changed since last read (" + $lines + " lines differ). Diff:\n" + $diff)}}'
                 exit 0
             fi
         fi
