@@ -12,7 +12,7 @@ Six hooks enforce the memory system programmatically:
 |-----------|---------|------|
 | **SessionStart** | Detect project, inject context pointer via `additionalContext`, flag unsynced sessions, run the post-compaction handoff | command |
 | **PreToolUse** (Read) | Deduplicate source-code re-reads (read-once) | command |
-| **PreCompact** | Write a checkpoint stub before context shrinks (side-effect only) | command |
+| **PreCompact** | Clear the read-once cache before context shrinks (checkpoint stubs retired) | command |
 | **Stop** | Track message count, nudge for /memory-sync via `systemMessage` if significant | command |
 | **SessionEnd** | Flag a real-length session that ended without /memory-sync | command |
 | **UserPromptSubmit** | Surface a logged correction when the prompt touches its topic | command |
@@ -65,9 +65,9 @@ Fires every time Claude Code starts. Deterministic context injection.
 1. **Detect project slug** — reads `.claude/CLAUDE.md` for the `memory:project-slug` comment. If missing, falls back through the detection priority chain. The slug is charset-clamped before it touches any path.
 2. **Validate Obsidian structure** — checks if `5 Agent Memory/sessions/by-project/<slug>/` exists (via file check if vault is locally synced).
 3. **Inject context pointer** — outputs `hookSpecificOutput.additionalContext` telling Claude where to find memory and what slug to use (or plain stdout when `MEMORY_HOOK_PLAINTEXT=1`).
-4. **Flag pending work** — surfaces unprocessed checkpoints and the `.unsynced` marker SessionEnd leaves when a prior session was never synced.
+4. **Flag pending work** — surfaces a pending handoff (`handoff.md`) and the `.unsynced` marker SessionEnd leaves when a prior session was never synced.
 5. **Flag if uninitialised** — if no slug found, context tells Claude to suggest running `/memory-init`.
-6. **Handle the compaction restart** — when `source=compact`, runs a slim handoff path that surfaces the PreCompact stub and directs blackbox to fill it, deliberately preserving the session counter and start time across compaction.
+6. **Handle the compaction restart** — when `source=compact`, harvests the compaction summary into a handoff scratch file, preserving the session counter and start time across compaction. (No stub-filling or blackbox direction — the handoff is injected directly.)
 
 ### SessionStart vs UserPromptSubmit
 
@@ -79,17 +79,44 @@ SessionStart fires once and carries the bulk context load — too expensive to r
 
 **File:** `~/.claude/hooks/pre-compact.sh`
 
-Fires before context compaction. This is the safety net — if the session gets long and auto-compacts, we don't lose state.
+Fires before context compaction. Checkpoint stubs are retired — the hook now does one thing only: clear the read-once cache so the compacted session starts with a clean slate.
 
 ### What It Does
 
 1. **Read project slug** from `.claude/CLAUDE.md`
-2. **Write checkpoint stub** — creates a timestamped stub in local staging (`~/.claude/memory-staging/<slug>/`) and clears the read-once cache for the session
-3. **Inject nothing** — Claude can't act mid-compaction, so the hook is a pure side effect. The handoff is deferred to the next SessionStart (`source=compact`), which surfaces the stub and directs blackbox to fill it.
+2. **Clear the read-once cache** — removes the per-session dedup index so the fresh compacted session can re-read files freely
+3. **Inject nothing** — Claude can't act mid-compaction, so the hook emits no output. The continuation path is the handoff workflow: SessionStart with `source=compact` harvests the compaction summary into a handoff scratch file and injects it as `additionalContext` so the next session resumes automatically.
 
-### Why Local Staging, Not Direct Obsidian Write
+### Compaction as a Dormant Safety Net
 
-Hooks are shell commands — they can't call MCP-Obsidian directly. So the hook writes to a local staging directory that Claude Code can then pick up and push to Obsidian. The SessionStart hook also checks for unstaged checkpoints and reminds Claude to process them.
+Compaction is no longer the primary large-session path. The preferred workflow is `/handoff` → `/clear` (explicit, user-controlled) long before compaction would fire. Compaction stays enabled as a last-resort catch, but its hook no longer writes stubs or directs any agent to fill them.
+
+### The Handoff Scratch Lifecycle
+
+```
+/handoff writes ~/.claude/memory-staging/<slug>/handoff.md
+    (fallback: session-end.sh harvests on a clear with no handoff,
+     or session-start.sh harvests the compaction summary on source=compact)
+  ↓
+SessionStart(source=clear) injects handoff.md as additionalContext
+  ↓
+SessionStart renames it handoff.consumed.md
+  ↓
+/memory-sync deletes both handoff.md and handoff.consumed.md
+```
+
+A single-slot scratch file — only one handoff at a time per project.
+
+### hooks/handoff-lib.sh — Shared Library
+
+`hooks/handoff-lib.sh` is a bash library that holds the handoff read/write functions used by multiple hooks. It is **not** registered as a hook event; it is sourced defensively by `session-start.sh`, `session-end.sh`, and `pre-compact.sh`:
+
+```bash
+# Sourced at the top of each hook that needs handoff functions:
+source "$(dirname "$0")/handoff-lib.sh" 2>/dev/null || true
+```
+
+The CLI dispatcher inside `handoff-lib.sh` is guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]` so sourcing it never runs any code — only function definitions are loaded.
 
 ---
 
@@ -200,7 +227,7 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
    ```
    Present summary of what was found.
 
-5. **Check for unstaged memory** — look in `~/.claude/memory-staging/<slug>/` for any checkpoints from prior sessions that never got synced
+5. **Check for a pending handoff** — look in `~/.claude/memory-staging/<slug>/` for a `handoff.md` or `handoff.consumed.md` from a prior session that was not yet cleaned up by `/memory-sync`
 
 6. **Ingest auto-memory** — if `~/.claude/projects/<project>/memory/MEMORY.md` exists, offer to pull relevant items into Obsidian
 
@@ -223,15 +250,17 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 ├── CLAUDE.md                              # Global instructions (already created)
 ├── agents/
 │   ├── memberberry.md                     # Retrieval subagent (memory: user)
-│   └── blackbox.md                        # Checkpoint subagent (memory: project)
+│   └── blackbox.md                        # Checkpoint subagent (explicit save-progress requests)
 ├── commands/
 │   ├── memory-sync.md                     # /memory-sync slash command
 │   ├── memory-load.md                     # /memory-load slash command
 │   ├── memory-init.md                     # /memory-init slash command
+│   ├── handoff.md                         # /handoff slash command
 │   └── decision.md                        # /decision slash command
 ├── hooks/
+│   ├── handoff-lib.sh                     # Shared handoff library (sourced, not a hook)
 │   ├── session-start.sh                   # SessionStart hook
-│   ├── pre-compact.sh                     # PreCompact hook
+│   ├── pre-compact.sh                     # PreCompact hook (clears read-once cache)
 │   ├── stop-memory.sh                     # Stop hook
 │   ├── session-end.sh                     # SessionEnd hook
 │   ├── prompt-corrections.sh              # UserPromptSubmit hook
@@ -241,7 +270,8 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 │       ├── .session-meta                  # Message count, timestamps, synced flag
 │       ├── .corrections-index             # title|key index for UserPromptSubmit
 │       ├── .unsynced                      # written by SessionEnd, cleared by /memory-sync
-│       └── checkpoint-2026-03-17T14-30.md # Pre-compaction stub
+│       ├── handoff.md                     # Current-work-unit scratch (written by /handoff)
+│       └── handoff.consumed.md            # Renamed by SessionStart after injection
 └── settings.json                          # Hook configuration
 ```
 
@@ -267,7 +297,7 @@ Hook (shell)                          Claude (MCP)
 
 ```yaml
 ---
-type: checkpoint|session-meta|nudge
+type: handoff|session-meta|nudge
 project-slug: my-project
 created: 2026-03-17T14:30:00Z
 ---
@@ -276,7 +306,7 @@ created: 2026-03-17T14:30:00Z
 <content that needs to be written to Obsidian>
 ```
 
-The SessionStart hook checks for pending staging files and injects context telling Claude to process them. This closes the loop without requiring MCP access from shell scripts.
+The SessionStart hook checks for a pending handoff file and injects its content as `additionalContext`, then renames it `handoff.consumed.md`. This closes the loop without requiring MCP access from shell scripts.
 
 ---
 
@@ -331,26 +361,26 @@ The hooks are registered in `~/.claude/settings.json` (user-level, applies to al
    - Updates project-index.md
    - No prior sessions found — "Starting fresh."
 5. User works normally
-6. PreCompact fires if session gets long → checkpoints to staging
+6. Stop hook nudges around ~150k tokens → user runs `/handoff` then `/clear`; next session auto-loads the handoff
 7. Stop fires after each response → tracks message count
 8. User runs /memory-sync at end → structured session note to Obsidian
 ```
 
-### Returning to an Existing Project
+### Returning to an Existing Project (after a `/handoff` + `/clear`)
 
 ```
-1. User opens Claude Code in ~/projects/my-project/
-2. SessionStart hook fires:
+1. User ran /handoff at the end of a large session → handoff.md written to staging
+2. User ran /clear → session ended; SessionEnd skips the .unsynced flag (clear is deliberate)
+3. User opens Claude Code in ~/projects/my-project/ (new session)
+4. SessionStart hook fires (source=clear):
    - Reads .claude/CLAUDE.md → slug=my-project, area=AWS
-   - Checks staging → finds checkpoint from yesterday's session
-   - Injects context:
-     "Project: my-project (AWS)
-      Unstaged checkpoint from 2026-03-16 — process to Obsidian.
-      Prior sessions available — run /memory-load for context."
-3. Claude processes checkpoint → writes to Obsidian working/
-4. User types: /memory-load
-5. Context loaded from prior sessions
-6. Work continues with full context
+   - Finds handoff.md in staging
+   - Injects handoff content as additionalContext
+   - Renames handoff.md → handoff.consumed.md
+5. Claude resumes with the injected handoff context automatically
+6. User types: /memory-load (optional — for deeper prior session context)
+7. Work continues with full context
+8. /memory-sync at end → structured session note to Obsidian, deletes handoff scratch files
 ```
 
 ---
@@ -362,7 +392,7 @@ Per-hook budgets, enforced as WARN (not FAIL) on the Tier 1 harness:
 | Hook | Budget |
 |------|--------|
 | SessionStart | warm ≤300ms / cold ≤3s (cold runs the cacheable vault queries in parallel) |
-| PreCompact | ~200ms (one stub write) |
+| PreCompact | ~50ms (clears read-once cache only) |
 | Stop | ≤50ms target |
 | SessionEnd | ≤100ms |
 | UserPromptSubmit | ≤100ms (fast-exits before stdin when no corrections exist) |

@@ -22,9 +22,9 @@ Six hooks fire on Claude Code lifecycle events:
 
 | Script | Event | Purpose | Budget |
 |--------|-------|---------|--------|
-| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag pending checkpoints + unsynced sessions, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
+| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag a pending handoff + unsynced sessions, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads | — |
-| `pre-compact.sh` | PreCompact | Write a checkpoint stub before compaction (side-effect only) | ~200ms |
+| `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired) | ~50ms |
 | `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | ≤50ms |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` | ≤100ms |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic | ≤100ms |
@@ -35,6 +35,7 @@ Six hooks fire on Claude Code lifecycle events:
 |------|---------|---------|
 | `memory-init.md` | `/memory-init` | One-time project setup: detect stack, create CLAUDE.md metadata, set up Obsidian folders, load prior context. Includes decisions log setup (Phase 4.5) and optional codebase analysis (Phase 4.6) |
 | `memory-sync.md` | `/memory-sync` | End-of-session: write session note, append to decisions log, propose learnings, clean staging. Supports `--dream`, `--ingest`, `--tidy`, `--status` flags |
+| `handoff.md` | `/handoff` | Capture the current work unit into a handoff scratch file before `/clear`; the next session auto-loads it |
 | `decision.md` | `/decision` | Ad-hoc decision logging to `_decisions.md` without full session sync |
 
 ### Project Slug Detection (priority order)
@@ -56,7 +57,7 @@ Each hook emits the channel Claude Code actually reads for that event (corrected
 | SessionStart, UserPromptSubmit | `hookSpecificOutput.additionalContext` (a string Claude sees); plain stdout is a documented fallback via `MEMORY_HOOK_PLAINTEXT=1` |
 | Stop | `systemMessage` (shown to the user, not Claude) — the correct nudge channel |
 | PreToolUse (read-once) | `hookSpecificOutput.permissionDecision` (`allow` / `deny` / `ask`) |
-| PreCompact | emits nothing — stub-only side effect; the post-compaction handoff comes from SessionStart with `source=compact` |
+| PreCompact | emits nothing — clears the read-once cache only; the post-compaction handoff comes from SessionStart with `source=compact` |
 | SessionEnd | side-effect only (writes `.unsynced`); receives `reason` on stdin, cannot inject |
 
 ## Installation
@@ -82,7 +83,9 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 
 - `.claude-plugin/plugin.json` — Plugin manifest (name, version, description)
 - `hooks/hooks.json` — Plugin hook registration (mirrors `config/settings.json` with `${CLAUDE_PLUGIN_ROOT}` paths)
+- `hooks/handoff-lib.sh` — Shared bash library holding handoff read/write functions; sourced by hooks, not registered as a hook event
 - `config/global-claude-md-v2.md` — Global CLAUDE.md with preferences, memory rules, MCP tool list, and vault structure
+- `commands/handoff.md` — `/handoff` command: captures the current work unit into a handoff scratch file before `/clear`
 - `docs/hooks-architecture.md` — System design document explaining the hook-MCP bridge pattern, detection logic, and interaction flows
 - `docs/setup-guide-v4.md` — v4 installation (plugin + manual); `docs/setup-guide-v2.md` is the older manual-only guide
 - `config/settings.json` — Hook registration config for `~/.claude/settings.json`

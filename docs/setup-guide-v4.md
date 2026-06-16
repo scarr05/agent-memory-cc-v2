@@ -8,9 +8,9 @@ Two ways to install: as a Claude Code **plugin** (recommended — one command re
 
 | Hook | Event | Does |
 |------|-------|------|
-| `session-start.sh` | SessionStart | Detect slug, inject the prior-context pointer, flag pending checkpoints and unsynced sessions, run the post-compaction handoff |
+| `session-start.sh` | SessionStart | Detect slug, inject the prior-context pointer, flag a pending handoff and unsynced sessions, run the post-compaction handoff |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads |
-| `pre-compact.sh` | PreCompact | Write a checkpoint stub before compaction (side-effect only — injects nothing) |
+| `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired — injects nothing) |
 | `stop-memory.sh` | Stop | Track message count, nudge for `/memory-sync`, check the 24-hour dream timer |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic |
@@ -22,7 +22,7 @@ Two ways to install: as a Claude Code **plugin** (recommended — one command re
 
 ### Slash commands
 
-`/memory-init`, `/memory-sync`, `/memory-load`, `/decision`.
+`/memory-init`, `/memory-sync`, `/memory-load`, `/handoff`, `/decision`.
 
 ---
 
@@ -52,7 +52,7 @@ In the session:
 
 - `/hooks` — lists all six hooks
 - `/agents` — shows `memberberry` and `blackbox`
-- `/help` — lists `/memory-init`, `/memory-sync`, `/memory-load`, `/decision`
+- `/help` — lists `/memory-init`, `/memory-sync`, `/memory-load`, `/handoff`, `/decision`
 
 Then run `/memory-init` in a project to set its slug and create the Obsidian folders.
 
@@ -66,7 +66,7 @@ Use this if you'd rather not run as a plugin, or you're on a Claude Code build w
 
 ```bash
 mkdir -p ~/.claude/hooks/read-once
-cp hooks/session-start.sh hooks/pre-compact.sh hooks/stop-memory.sh \
+cp hooks/handoff-lib.sh hooks/session-start.sh hooks/pre-compact.sh hooks/stop-memory.sh \
    hooks/session-end.sh hooks/prompt-corrections.sh ~/.claude/hooks/
 cp hooks/read-once/hook.sh ~/.claude/hooks/read-once/
 chmod +x ~/.claude/hooks/*.sh ~/.claude/hooks/read-once/hook.sh
@@ -94,7 +94,7 @@ cp agents/memberberry.md agents/blackbox.md ~/.claude/agents/
 ```bash
 mkdir -p ~/.claude/commands
 cp commands/memory-init.md commands/memory-sync.md \
-   commands/memory-load.md commands/decision.md ~/.claude/commands/
+   commands/memory-load.md commands/handoff.md commands/decision.md ~/.claude/commands/
 ```
 
 ### 5. Global CLAUDE.md

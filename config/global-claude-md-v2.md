@@ -8,10 +8,10 @@ I use a three-tier persistent memory system backed by Obsidian ([your-vault-name
 
 The SessionStart hook fires before your first response and injects:
 - Current **project slug** (auto-detected from git/folder/CLAUDE.md)
-- Any **pending checkpoints** from prior sessions (in `~/.claude/memory-staging/`)
+- Any **pending handoff** from a prior `/handoff` + `/clear` (in `~/.claude/memory-staging/<slug>/handoff.md`)
 - Whether `/memory-init` has been run for this project
 
-**If the hook reports pending checkpoints:** read the staging files, write their content to Obsidian `5 Agent Memory/working/` via MCP, then delete the staging files.
+**If the hook injects a pending handoff:** it is loaded automatically as `additionalContext` and renamed `handoff.consumed.md` — you do not need to process it manually. The handoff was written by `/handoff` and is cleaned up by `/memory-sync`.
 
 **If the hook reports no memory config:** suggest running `/memory-init` before starting significant work.
 
@@ -29,8 +29,7 @@ The hook gives you the slug and dynamic state. For prior context:
 - Use `5 Agent Memory/working/` freely as scratchpad for in-progress state
 - If the Stop hook nudges about session length, acknowledge it
 - If the UserPromptSubmit hook surfaces a logged correction (it fires when my prompt touches that topic), honour it — it flags a past mistake I don't want repeated
-- If context hits ~50%, delegate to **blackbox** subagent to capture a checkpoint before compaction
-- The PreCompact hook creates a staging file automatically — blackbox can fill it or write its own checkpoint directly to the vault
+- When the session grows large (the Stop hook nudges around ~150k tokens, configurable via `memory.handoffTokenThreshold`), run `/handoff` to capture the current work unit, then `/clear` and continue in a fresh session — it auto-loads the handoff. Avoid relying on compaction; it stays on only as a dormant safety net.
 - If memory context is missing after compaction or `/clear`, run `/memory-load` to restore it. Persistent state is in `.claude/memory-state.json`.
 
 ### Session End
@@ -77,7 +76,7 @@ Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, 
 ### Subagents
 
 - **memberberry** — Memory retrieval. Delegate all vault read operations here.
-- **blackbox** — Session checkpoint capture before compaction.
+- **blackbox** — Session checkpoint capture on explicit save-progress requests.
 
 ### Context7
 
@@ -88,7 +87,8 @@ Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, 
 ```
 ~/.claude/memory-staging/<slug>/       # Hook staging (local, ephemeral)
     .session-meta                      # Message count, timestamps
-    checkpoint-*.md                    # Pre-compaction checkpoints
+    handoff.md                         # Current-work-unit scratch (written by /handoff)
+    handoff.consumed.md                # Renamed by SessionStart after injection
 
 5 Agent Memory/sessions/by-project/<slug>/  # Obsidian (permanent)
 5 Agent Memory/learnings/                   # Cross-project knowledge

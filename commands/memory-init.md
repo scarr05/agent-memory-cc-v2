@@ -191,7 +191,7 @@ This project uses the persistent memory system.
 - **Area:** `<area>`
 - **Related vault notes:** `<vault-path>`
 - Use **memberberry** agent for prior context retrieval
-- Use **blackbox** agent for checkpoint capture before compaction
+- Use **blackbox** agent only for explicit "save progress"/checkpoint requests; for large sessions use `/handoff` then `/clear`
 - Do NOT call MCP search_notes or read vault notes directly
 
 On session start, search for prior context before starting non-trivial work.
@@ -213,7 +213,6 @@ cat > .claude/memory-state.json << 'STATEJSON'
   "area": "<confirmed-area>",
   "sessionPath": "5 Agent Memory/sessions/by-project/<confirmed-slug>/",
   "detectedVia": "memory-init",
-  "pendingCheckpoints": [],
   "dreamPending": false,
   "lastUpdated": "<current-ISO-timestamp>"
 }

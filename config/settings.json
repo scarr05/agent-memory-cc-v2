@@ -1,4 +1,7 @@
 {
+  "memory": {
+    "handoffTokenThreshold": 150000
+  },
   "hooks": {
     "SessionStart": [
       {
