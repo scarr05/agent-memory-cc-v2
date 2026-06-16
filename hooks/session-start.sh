@@ -158,12 +158,9 @@ fi
 # Ensure staging directory exists
 [[ -d "$PROJECT_DIR" ]] || mkdir -p "$PROJECT_DIR"
 
-# Gather pending checkpoints once — both the post-compaction fast path and the
-# full path's handoff section use this list.
+# Checkpoint stubs are retired (replaced by the handoff scratch). Keep the field
+# in the state file as an empty array for backward compatibility.
 PENDING_CHECKPOINTS=()
-while IFS= read -r -d '' file; do
-    PENDING_CHECKPOINTS+=("$file")
-done < <(find "$PROJECT_DIR" -name 'checkpoint-*.md' -print0 2>/dev/null || true)
 
 # Capture the prior session's meta BEFORE the full path resets it. PRIOR_COUNT
 # feeds both the dream timer and the "previous session" hint further down.
@@ -204,6 +201,40 @@ if [[ "$SOURCE" == "clear" ]]; then
     emit_context_and_exit "$CONTEXT"
 fi
 
+# --- Fast path: post-compaction restart ---
+# Auto-compaction is a dormant safety net. If it fires, harvest CC's own summary
+# into a compact-fallback handoff (deterministic, zero LLM) and inject it. No
+# blackbox-fill instruction — the stub mechanism it served is retired.
+if [[ "$SOURCE" == "compact" ]]; then
+    if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" ]]; then
+        CF="$PROJECT_DIR/handoff.md"
+        # Do not clobber an active manual handoff if one somehow exists.
+        if [[ ! -f "$CF" ]]; then
+            build_deterministic_handoff --transcript "$TRANSCRIPT" --slug "$SLUG" --source compact-fallback --out "$CF" 2>/dev/null || true
+            # Stamp supersedes from any prior consumed handoff so /memory-sync can
+            # dedup the chain (source!=handoff => the thin-guard is skipped).
+            finalize_handoff --out "$CF" --consumed "$PROJECT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
+        fi
+        CONTEXT="## Memory System (post-compact) — \`$SLUG\`\\n"
+        if [[ -f "$CF" ]]; then
+            SUMM=$(extract_block NARRATIVE "$CF")
+            CONTEXT+="Recovered context from the compaction summary (full file: \`$CF\`):\\n\\n"
+            CONTEXT+="$(printf '%s' "$SUMM" | sed 's/$/\\n/' | tr -d '\n')\\n"
+        fi
+        CONTEXT+="\\n→ memberberry for prior context. Consider \`/handoff\` then \`/clear\` next time instead of compaction.\\n"
+        emit_context_and_exit "$CONTEXT"
+    fi
+    # Library or transcript unavailable — minimal restart, surfaced loudly so a
+    # missing install is visible rather than a silent no-harvest.
+    CONTEXT="## Memory System (post-compact)\\n"
+    if [[ "$HANDOFF_LIB" != "1" ]]; then
+        CONTEXT+="⚠ \`hooks/handoff-lib.sh\` not installed — could not harvest the compaction summary. Install it (docs/setup-guide-v4.md).\\n"
+    fi
+    CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n"
+    CONTEXT+="\\n→ memberberry for prior context.\\n"
+    emit_context_and_exit "$CONTEXT"
+fi
+
 # ===== Full path (source=startup|resume) =====
 
 # Dream timer (moved here from the Stop hot path). Flag a consolidation if the
@@ -226,16 +257,6 @@ STATE_FILE=".claude/memory-state.json"
 mkdir -p .claude
 
 CHECKPOINT_JSON="[]"
-if [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
-    CHECKPOINT_LIST=""
-    for file in "${PENDING_CHECKPOINTS[@]}"; do
-        if [[ -n "$CHECKPOINT_LIST" ]]; then
-            CHECKPOINT_LIST="$CHECKPOINT_LIST, "
-        fi
-        CHECKPOINT_LIST="$CHECKPOINT_LIST\"$file\""
-    done
-    CHECKPOINT_JSON="[$CHECKPOINT_LIST]"
-fi
 
 DREAM_PENDING="false"
 if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
@@ -466,15 +487,6 @@ else
     CONTEXT+="Falling back to minimal context. Use MCP for vault access.\\n\\n"
 fi
 
-# --- Pending checkpoints ---
-if [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
-    CONTEXT+="### Pending Checkpoints\\n"
-    for cp in "${PENDING_CHECKPOINTS[@]}"; do
-        CONTEXT+="- \`$cp\`\\n"
-    done
-    CONTEXT+="Process these to Obsidian \`5 Agent Memory/working/\` then delete staging files.\\n\\n"
-fi
-
 # Dream nudge
 if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
     CONTEXT+="💤 **Dream consolidation pending.** Run \`/memory-sync --dream\` when ready.\\n\\n"
@@ -488,7 +500,7 @@ fi
 if [[ -f "$PROJECT_DIR/.unsynced" ]]; then
     UNSYNCED_MSGS=$(sed -n 's/^messages=\([0-9]*\).*/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
     UNSYNCED_ENDED=$(sed -n 's/^ended=\(.*\)/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
-    CONTEXT+="⚠ **Previous session (${UNSYNCED_MSGS:-?} msgs, ended ${UNSYNCED_ENDED:-unknown}) was never synced.** Run \`/memory-sync\`, or check the pending checkpoints above.\\n\\n"
+    CONTEXT+="⚠ **Previous session (${UNSYNCED_MSGS:-?} msgs, ended ${UNSYNCED_ENDED:-unknown}) was never synced.** Run \`/memory-sync\`.\\n\\n"
 elif [[ "$PRIOR_COUNT" -gt 10 ]]; then
     CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced (\`/memory-sync --status\`).\\n\\n"
 fi
@@ -496,7 +508,7 @@ fi
 # --- Delegation guidance ---
 CONTEXT+="### Memory Agents\\n"
 CONTEXT+="→ For prior context: delegate to **memberberry** subagent.\\n"
-CONTEXT+="→ For checkpoint capture: delegate to **blackbox** subagent.\\n"
+CONTEXT+="→ To hand off before \`/clear\`: run \`/handoff\` (blackbox remains only for explicit \"save progress\").\\n"
 CONTEXT+="→ Do NOT call MCP search_notes or read vault notes directly.\\n"
 
 # --- Output ---
