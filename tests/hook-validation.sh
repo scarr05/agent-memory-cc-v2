@@ -246,6 +246,7 @@ else
     STAGING_SLUG="${SS_DETECTED_SLUG:-$PROJECT_NAME}"
     PC_STAGING="$HOME/.claude/memory-staging/$STAGING_SLUG"
 
+    PC_STUBS_BEFORE=$(find "$PC_STAGING" -name 'checkpoint-*.md' 2>/dev/null | wc -l | tr -d ' ')
     PC_START=$(date +%s%N 2>/dev/null || echo "0")
     PC_OUTPUT=$(echo '{}' | bash "$PC_HOOK" 2>"$RESULTS_DIR/.pc-stderr-tmp" || true)
     PC_END=$(date +%s%N 2>/dev/null || echo "0")
@@ -267,20 +268,13 @@ else
         fail "PreCompact should emit nothing on stdout, got: $(echo "$PC_OUTPUT" | head -c 200)"
     fi
 
-    # Check: checkpoint stub created (use ls -t instead of find -printf for Windows compat)
-    LATEST_CP=$(find "$PC_STAGING" -name 'checkpoint-*.md' 2>/dev/null | while read -r f; do echo "$(stat -c %Y "$f" 2>/dev/null || echo 0) $f"; done | sort -rn | head -1 | cut -d' ' -f2- || true)
-    if [[ -n "$LATEST_CP" ]] && [[ -f "$LATEST_CP" ]]; then
-        pass "Checkpoint stub created: $(basename "$LATEST_CP")"
-        # Check frontmatter
-        if head -1 "$LATEST_CP" | grep -q '^---'; then
-            pass "Checkpoint has YAML frontmatter"
-        else
-            fail "Checkpoint missing YAML frontmatter"
-        fi
-        CP_SIZE=$(wc -c < "$LATEST_CP")
+    # Check: NO checkpoint stub written — the stub mechanism is retired. PreCompact
+    # is now only the read-once cache clear; recovery is SessionStart(source=compact).
+    PC_STUBS_AFTER=$(find "$PC_STAGING" -name 'checkpoint-*.md' 2>/dev/null | wc -l | tr -d ' ')
+    if [[ "$PC_STUBS_AFTER" == "$PC_STUBS_BEFORE" ]]; then
+        pass "PreCompact writes no checkpoint stub (count unchanged: $PC_STUBS_BEFORE)"
     else
-        fail "No checkpoint stub found in $PC_STAGING"
-        CP_SIZE=0
+        fail "PreCompact wrote a checkpoint stub (before=$PC_STUBS_BEFORE after=$PC_STUBS_AFTER) — stub writer not gutted"
     fi
 
     # Check: no stderr
@@ -290,7 +284,7 @@ else
         fail "Stderr: $(echo "$PC_STDERR" | head -c 200)"
     fi
 
-    echo "  Metrics: stub ${CP_SIZE} bytes, ${PC_MS}ms"
+    echo "  Metrics: ${PC_MS}ms"
 fi
 echo ""
 
