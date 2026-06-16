@@ -9,6 +9,15 @@ STAGING_DIR="$HOME/.claude/memory-staging"
 CLAUDE_MD=".claude/CLAUDE.md"
 OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
+# Shared handoff harvest library (degrade gracefully if a partial install omits it).
+LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
+else
+    HANDOFF_LIB=0
+fi
+
 # --- Output emitter ---
 # additionalContext is the documented injection channel for SessionStart.
 # MEMORY_HOOK_PLAINTEXT=1 falls back to plain stdout (also documented) in case
@@ -122,7 +131,9 @@ detect_area() {
 
 # SessionStart receives JSON on stdin; `source` tells us why the session began
 # (startup | resume | compact | clear). Read it once, early.
-SOURCE=$(cat | jq -r '.source // "startup"' 2>/dev/null || echo "startup")
+STDIN_JSON=$(cat || true)
+SOURCE=$(printf '%s' "$STDIN_JSON" | jq -r '.source // "startup"' 2>/dev/null || echo "startup")
+TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
 _DETECTED_VIA=""
 SLUG=$(detect_slug)
@@ -135,6 +146,14 @@ SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
 DETECTED_VIA="$_DETECTED_VIA"
 AREA=$(detect_area)
 PROJECT_DIR="$STAGING_DIR/$SLUG"
+
+# Authoritative transcript breadcrumb for /handoff (CLAUDE_SESSION_ID is unset in
+# the command Bash env). The Stop hook refreshes this every turn; writing it here
+# covers the window before the first Stop.
+if [[ -n "${TRANSCRIPT:-}" ]]; then
+    mkdir -p "$PROJECT_DIR"
+    printf '%s\n' "$TRANSCRIPT" > "$PROJECT_DIR/.transcript-path" 2>/dev/null || true
+fi
 
 # Ensure staging directory exists
 [[ -d "$PROJECT_DIR" ]] || mkdir -p "$PROJECT_DIR"
@@ -155,23 +174,33 @@ fi
 PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
 PRIOR_COUNT="${PRIOR_COUNT:-0}"
 
-# --- Fast path: post-compaction / post-clear restart ---
-# Compaction and /clear keep the original on-disk state (slug, state file, meta).
-# These restarts only need slug + checkpoint handoff + delegation guidance, so
-# skip git inspection, all CLI vault queries, the state-file rewrite, and the
-# session-meta reset. Skipping the reset deliberately preserves the prior
-# session_start_epoch and message_count, so Stop's duration/count keep spanning
-# the (still logically continuous) session across the compaction.
-if [[ "$SOURCE" == "compact" ]] || [[ "$SOURCE" == "clear" ]]; then
-    CONTEXT="## Memory System (post-$SOURCE)\\n"
-    CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n"
-    if [[ "$SOURCE" == "compact" ]] && [[ ${#PENDING_CHECKPOINTS[@]} -gt 0 ]]; then
-        CONTEXT+="\\n**ACTION REQUIRED:** Delegate to the blackbox subagent NOW to fill in the pending checkpoint(s) with session state, then continue the interrupted work:\\n"
-        for cp in "${PENDING_CHECKPOINTS[@]}"; do
-            CONTEXT+="- \`$cp\`\\n"
-        done
+# --- Fast path: post-/clear restart ---
+# /clear wipes conversation memory but keeps on-disk state. If a handoff was
+# armed (manually via /handoff or by the SessionEnd clear-fallback), inject it
+# and mark it consumed so a second /clear cannot re-inject stale state.
+if [[ "$SOURCE" == "clear" ]]; then
+    HANDOFF_FILE="$PROJECT_DIR/handoff.md"
+    if [[ -f "$HANDOFF_FILE" ]]; then
+        if [[ "$HANDOFF_LIB" == "1" ]]; then
+            NARR=$(extract_block NARRATIVE "$HANDOFF_FILE")
+            CONTEXT="## RESUMING FROM HANDOFF — \`$SLUG\`\\n"
+            CONTEXT+="A handoff scratch from the prior session is being restored. Full file: \`$HANDOFF_FILE\`\\n\\n"
+            CONTEXT+="$(printf '%s' "$NARR" | sed 's/$/\\n/' | tr -d '\n')\\n"
+            CONTEXT+="\\n(Full git state, touched files, open TODOs and tagged corrections are in the file above.)\\n"
+            CONTEXT+="\\n→ Continue the work. Run \`/memory-sync\` when the effort is done to consolidate into the vault.\\n"
+            mv "$HANDOFF_FILE" "$PROJECT_DIR/handoff.consumed.md" 2>/dev/null || true
+            emit_context_and_exit "$CONTEXT"
+        fi
+        # Library missing on a continuation-critical path — fail LOUD rather than
+        # silently dropping the armed handoff (do not consume it).
+        CONTEXT="## ⚠ Handoff present but harvest library missing — \`$SLUG\`\\n"
+        CONTEXT+="An armed handoff exists at \`$HANDOFF_FILE\` but \`hooks/handoff-lib.sh\` is not installed, so it cannot be parsed. Install it (see docs/setup-guide-v4.md) or read the file manually before continuing.\\n"
+        emit_context_and_exit "$CONTEXT"
     fi
-    CONTEXT+="\\n→ memberberry for prior context, blackbox for checkpoints. No direct MCP vault reads.\\n"
+    # No armed handoff — slim restart context.
+    CONTEXT="## Memory System (post-clear)\\n"
+    CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n"
+    CONTEXT+="\\n→ memberberry for prior context. No armed handoff was found.\\n"
     emit_context_and_exit "$CONTEXT"
 fi
 
