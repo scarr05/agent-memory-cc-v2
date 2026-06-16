@@ -43,6 +43,19 @@ assert_contains "adversarial: nested key is not a boundary" "/after/real-edit.tx
 assert_contains "adversarial: keeps the nested-key line"     "just discussing it"   "$ADVWIN"
 rm -f "$ADV"
 
+# harvest_files: frequency table from Edit/Write/MultiEdit/NotebookEdit, post-window
+FILES="$(window_transcript "$FIX" | harvest_files)"
+assert_contains "files lists the twice-edited lib" "/src/handoff-lib.sh" "$FILES"
+assert_contains "files lists session-start"        "/src/session-start.sh" "$FILES"
+assert_not_contains "files excludes pre-window"     "/old/before-first-compact.txt" "$FILES"
+# /src/handoff-lib.sh edited twice => count 2, must sort above the single-edit file
+TOPFILE="$(printf '%s\n' "$FILES" | head -1)"
+assert_contains "most-frequent file is the lib" "/src/handoff-lib.sh" "$TOPFILE"
+
+# harvest_git: emits a Branch line when run inside this repo
+GIT="$(harvest_git)"
+assert_contains "git emits Branch" "Branch:" "$GIT"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

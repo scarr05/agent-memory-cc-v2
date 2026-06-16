@@ -35,4 +35,29 @@ window_transcript() {
     fi
 }
 
+# Frequency table of files edited this work unit. Reads windowed JSONL on stdin.
+# Covers Edit/Write/MultiEdit (file_path) and NotebookEdit (notebook_path).
+harvest_files() {
+    jq -r 'select(.type=="assistant") | .message.content[]?
+           | select(.type=="tool_use")
+           | select(.name=="Edit" or .name=="Write" or .name=="MultiEdit" or .name=="NotebookEdit")
+           | (.input.file_path // .input.notebook_path // empty)' 2>/dev/null \
+        | sort | uniq -c | sort -rn | sed -E 's/^[[:space:]]*//'
+}
+
+# Git snapshot for the handoff: branch, dirty count, last 3 commits. Operates on
+# the current working directory (the command/hook runs in the repo root).
+harvest_git() {
+    if ! { command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; }; then
+        echo "Not a git repo."
+        return 0
+    fi
+    local branch dirty
+    branch=$(git branch --show-current 2>/dev/null || echo "detached")
+    dirty=$(git status --short 2>/dev/null | wc -l | tr -d ' ')
+    echo "Branch: \`$branch\` ($dirty dirty files)"
+    echo "Recent commits:"
+    git log --oneline -3 2>/dev/null | sed 's/^/- /' || true
+}
+
 # ---- CLI dispatcher (added in Task 6) ----
