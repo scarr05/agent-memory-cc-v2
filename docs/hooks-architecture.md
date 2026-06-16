@@ -83,9 +83,8 @@ Fires before context compaction. Checkpoint stubs are retired — the hook now d
 
 ### What It Does
 
-1. **Read project slug** from `.claude/CLAUDE.md`
-2. **Clear the read-once cache** — removes the per-session dedup index so the fresh compacted session can re-read files freely
-3. **Inject nothing** — Claude can't act mid-compaction, so the hook emits no output. The continuation path is the handoff workflow: SessionStart with `source=compact` harvests the compaction summary into a handoff scratch file and injects it as `additionalContext` so the next session resumes automatically.
+1. **Clear the read-once cache** — removes the per-session dedup index (keyed on `CLAUDE_SESSION_ID`) so the fresh compacted session can re-read files freely
+2. **Inject nothing** — Claude can't act mid-compaction, so the hook emits no output. The continuation path is the handoff workflow: SessionStart with `source=compact` harvests the compaction summary into a handoff scratch file and injects it as `additionalContext` so the next session resumes automatically.
 
 ### Compaction as a Dormant Safety Net
 
@@ -109,11 +108,11 @@ A single-slot scratch file — only one handoff at a time per project.
 
 ### hooks/handoff-lib.sh — Shared Library
 
-`hooks/handoff-lib.sh` is a bash library that holds the handoff read/write functions used by multiple hooks. It is **not** registered as a hook event; it is sourced defensively by `session-start.sh`, `session-end.sh`, and `pre-compact.sh`:
+`hooks/handoff-lib.sh` is a bash library that holds the handoff read/write functions used by multiple hooks. It is **not** registered as a hook event; it is sourced defensively by `session-start.sh` and `session-end.sh`:
 
 ```bash
 # Sourced at the top of each hook that needs handoff functions:
-source "$(dirname "$0")/handoff-lib.sh" 2>/dev/null || true
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/handoff-lib.sh" 2>/dev/null || true
 ```
 
 The CLI dispatcher inside `handoff-lib.sh` is guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]` so sourcing it never runs any code — only function definitions are loaded.
@@ -392,7 +391,7 @@ Per-hook budgets, enforced as WARN (not FAIL) on the Tier 1 harness:
 | Hook | Budget |
 |------|--------|
 | SessionStart | warm ≤300ms / cold ≤3s (cold runs the cacheable vault queries in parallel) |
-| PreCompact | ~50ms (clears read-once cache only) |
+| PreCompact | ≤100ms (clears read-once cache only; spawn-dominated) |
 | Stop | ≤50ms target |
 | SessionEnd | ≤100ms |
 | UserPromptSubmit | ≤100ms (fast-exits before stdin when no corrections exist) |

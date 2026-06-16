@@ -1,6 +1,6 @@
 ---
 name: agent-memory
-description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing staging checkpoints, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires MCP-Obsidian server."
+description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing a staging handoff, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires MCP-Obsidian server."
 ---
 
 # Agent Memory v4
@@ -74,9 +74,9 @@ Six hooks fire automatically. Know what they do so you can respond appropriately
 
 | Hook | Fires When | What It Does | Your Job |
 |------|-----------|--------------|----------|
-| **SessionStart** | Session begins (incl. `source=compact`) | Injects slug, pending checkpoints, the unsynced-session flag, and init status via `additionalContext`. On `source=compact`, surfaces the pre-compaction stub. | Process pending staging files. On a compaction restart, delegate to **blackbox** to fill the stub. Search Obsidian for prior context if the task is non-trivial. |
+| **SessionStart** | Session begins (incl. `source=compact`) | Injects slug, a pending handoff, the unsynced-session flag, and init status via `additionalContext`. On `source=compact`, harvests the compaction summary into a handoff. | Process pending staging files. On a compaction restart, the handoff is injected automatically — review it and continue. Search Obsidian for prior context if the task is non-trivial. |
 | **PreToolUse** (Read) | Before a Read | Blocks redundant re-reads (read-once) via `permissionDecision`. | Nothing — it's transparent. |
-| **PreCompact** | Before compaction | Writes a checkpoint stub to staging and clears the read-once cache. Injects nothing — the handoff happens at the next SessionStart. | Nothing at compaction time; the post-compaction SessionStart drives the handoff. |
+| **PreCompact** | Before compaction | Clears the read-once cache; checkpoint stubs are retired. Injects nothing — the handoff happens at the next SessionStart. | Nothing at compaction time; the post-compaction SessionStart drives the handoff. |
 | **Stop** | Each response | Nudges via `systemMessage` if the session is long (15/30 messages, 45+ min); checks the 24-hour dream timer. | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
 | **SessionEnd** | Session ends | Writes `.unsynced` if a real-length session ended without `/memory-sync` (skips a deliberate `clear`). Side-effect only. | Nothing — the next SessionStart surfaces it. |
 | **UserPromptSubmit** | Each prompt | If the prompt touches a logged correction's topic, injects a one-line pointer via `additionalContext`. | Load the correction via memberberry before acting on that topic. |
@@ -85,7 +85,7 @@ Six hooks fire automatically. Know what they do so you can respond appropriately
 
 Hooks write to `~/.claude/memory-staging/<slug>/` because they can't call MCP. You bridge this to Obsidian:
 
-1. **Checkpoint files** (`checkpoint-*.md`) — read the file, fill in session state, write to `5 Agent Memory/working/<slug>-checkpoint.md`, delete staging file.
+1. **Handoff scratch** (`handoff.md`) — written by `/handoff` (or harvested by a hook). SessionStart injects it automatically and renames it `handoff.consumed.md`; `/memory-sync` deletes both. You normally don't process it by hand.
 2. **Session meta** (`.session-meta`) — tracks message count and timing. Read-only for you; managed by hooks.
 
 ---
@@ -256,7 +256,7 @@ When the user says "continue where we left off" or "resume X":
 3. Find most recent relevant session with resumable: true
 4. Read full session note
 5. Read any linked working/ files
-6. Check staging directory for unprocessed checkpoints
+6. Check staging directory for a pending handoff
 7. Summarise: "Last session on [date], we [summary].
    Open items were: [list]. Ready to continue?"
 8. Proceed with context loaded
@@ -304,7 +304,7 @@ The architecture optimises tokens at every layer:
 
 **Rules:**
 - Never call MCP `search_notes` or `read_note` directly — delegate to memberberry
-- Never manually fill checkpoint stubs — delegate to blackbox
+- For large sessions, run `/handoff` then `/clear`; delegate to blackbox only for explicit "save progress" requests
 - Use `property:read` over `read` when you only need frontmatter
 - Keep session summaries concise — details go in linked files
 
@@ -343,8 +343,8 @@ The architecture optimises tokens at every layer:
 
 ```
 1. SessionStart hook injects: "Project: my-project, area: AWS.
-   1 pending checkpoint from yesterday."
-2. Agent processes checkpoint → writes to working/
+   Pending handoff from yesterday — loaded into context."
+2. Agent reviews the injected handoff and continues
 3. Agent searches: sessions/by-project/my-project/ and learnings/ for "project-name"
 4. Finds recent session and preferences
 5. Agent: "Found prior project work. Last session: v5 pillar alignment.
@@ -364,25 +364,24 @@ The architecture optimises tokens at every layer:
 5. Updates project-index.md with last session date
 ```
 
-### Processing a staging checkpoint
+### Resuming from a handoff
 
 ```
-1. SessionStart hook reports: "Pending checkpoint at
-   ~/.claude/memory-staging/my-project/checkpoint-2026-03-17.md"
-2. Agent reads the staging file
-3. Fills in session state if it's a stub
-4. Writes to: 5 Agent Memory/working/my-project-checkpoint.md
-5. Deletes the staging file
-6. Continues with recovered context
+1. SessionStart(source=clear) reports: "Pending handoff at
+   ~/.claude/memory-staging/my-project/handoff.md — loaded into context."
+2. The hook injects the handoff content as additionalContext
+3. The hook renames it handoff.consumed.md
+4. Agent reviews the injected work unit and continues
+5. /memory-sync later deletes handoff.md and handoff.consumed.md
 ```
 
-### Pre-compaction save
+### Handing off a large session
 
 ```
-1. PreCompact hook fires, creates staging stub
-2. Agent fills in: current decisions, progress, open threads, key files
-3. After compaction, SessionStart will flag the staging file
-4. Next session (or post-compact continuation) picks it up
+1. Stop hook nudges around ~150k tokens
+2. User runs /handoff → current work unit captured to handoff.md
+3. User runs /clear
+4. Next session's SessionStart injects the handoff automatically
 ```
 
 ---

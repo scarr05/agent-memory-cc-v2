@@ -24,7 +24,7 @@ Six hooks fire on Claude Code lifecycle events:
 |--------|-------|---------|--------|
 | `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag a pending handoff + unsynced sessions, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads | — |
-| `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired) | ~50ms |
+| `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired) | ≤100ms |
 | `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | ≤50ms |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` | ≤100ms |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic | ≤100ms |

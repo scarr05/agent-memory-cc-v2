@@ -6,7 +6,7 @@ This is a configuration and tooling package — not a traditional software proje
 
 **v3** introduced the Obsidian CLI for token-efficient reads, Haiku subagents for retrieval (memberberry) and checkpoint capture (blackbox), a vendored read-once hook for source-code deduplication, and slimmed CLAUDE.md templates.
 
-**v4** corrects the hook output schemas to the form Claude Code actually reads, adds two hooks (SessionEnd flags unsynced sessions; UserPromptSubmit surfaces corrections just-in-time), redesigns the compaction handoff (PreCompact writes a stub, SessionStart picks it up with `source=compact`), gives the subagents native memory, sets per-hook performance budgets, and packages everything as an installable plugin.
+**v4** corrects the hook output schemas to the form Claude Code actually reads, adds two hooks (SessionEnd flags unsynced sessions; UserPromptSubmit surfaces corrections just-in-time), replaces the old checkpoint-stub mechanism with the handoff workflow (`/handoff` → `/clear`, with SessionStart harvesting the compaction summary into a handoff on `source=compact`), gives the subagents native memory, sets per-hook performance budgets, and packages everything as an installable plugin.
 
 ## Why Hooks?
 
@@ -29,7 +29,7 @@ See [docs/hooks-architecture.md](docs/hooks-architecture.md) for the full design
 | Agent | Model | Purpose |
 |-------|-------|---------|
 | `memberberry` | Haiku | Memory retrieval — progressive CLI search → filter → summarise |
-| `blackbox` | Haiku | Session checkpoint — captures state before compaction |
+| `blackbox` | Haiku | Session checkpoint — captures state on an explicit "save progress" request |
 
 Agent definitions live in `agents/` and are deployed to `~/.claude/agents/`. In v4 both carry native subagent memory: memberberry `memory: user` (cross-project search strategy), blackbox `memory: project` (per-project checkpoint and merge context).
 
@@ -52,7 +52,7 @@ Configuration via environment variables — see `hooks/read-once/README.md`.
 ├── hooks/
 │   ├── hooks.json              # Plugin hook registration (${CLAUDE_PLUGIN_ROOT} paths)
 │   ├── session-start.sh        # SessionStart — slug, vault state, context injection, compaction handoff
-│   ├── pre-compact.sh          # PreCompact — write checkpoint stub, clear read-once cache
+│   ├── pre-compact.sh          # PreCompact — clear read-once cache (checkpoint stubs retired)
 │   ├── stop-memory.sh          # Stop — track message count, nudge for /memory-sync, dream timer
 │   ├── session-end.sh          # SessionEnd — flag a session that ended without /memory-sync
 │   ├── prompt-corrections.sh   # UserPromptSubmit — surface a logged correction in context
@@ -124,12 +124,12 @@ See [docs/setup-guide-v4.md](docs/setup-guide-v4.md) for full installation steps
 
 ## How It Works
 
-1. **SessionStart hook** fires when Claude Code opens a project. It detects the project slug (from CLAUDE.md metadata, git remote, manifest files, or directory name), checks for pending checkpoints, flags any prior session that ended without a sync, and injects prior context via `hookSpecificOutput.additionalContext`. When the session restarts after compaction (`source=compact`) it runs the checkpoint handoff.
+1. **SessionStart hook** fires when Claude Code opens a project. It detects the project slug (from CLAUDE.md metadata, git remote, manifest files, or directory name), checks for a pending handoff, flags any prior session that ended without a sync, and injects prior context via `hookSpecificOutput.additionalContext`. When the session restarts after compaction (`source=compact`) it harvests the compaction summary into a handoff and injects it.
 2. **Claude searches Obsidian** for prior session notes and learnings relevant to the current project, picking up where previous sessions left off.
 3. **UserPromptSubmit hook** runs on each prompt. If the prompt touches a topic with a logged correction, it surfaces a one-line pointer so the correction is loaded before Claude acts.
 4. **You work normally.** The system stays out of the way during regular development. The read-once PreToolUse hook quietly blocks redundant file re-reads.
 5. **Stop hook** runs after each response, incrementing a message counter. At 15 and 30 messages (or after 45+ minutes), it nudges you to run `/memory-sync`. It also checks a 24-hour dream timer and sets a `.dream-pending` flag when consolidation is due.
-6. **PreCompact hook** fires before context compaction, writing a checkpoint stub to staging (a side effect only — it injects nothing). The post-compaction SessionStart surfaces the stub and directs blackbox to fill it, so nothing is lost when the context window is trimmed.
+6. **PreCompact hook** fires before context compaction. It only clears the read-once cache and injects nothing — checkpoint stubs are retired. Continuity comes from the handoff workflow: the post-compaction SessionStart (`source=compact`) harvests Claude Code's own compaction summary into a handoff scratch file and injects it, so the trimmed session can pick up where it left off. The preferred path is `/handoff` → `/clear` before compaction ever fires.
 7. **SessionEnd hook** fires when the session ends. If a real-length session ended without `/memory-sync` (and wasn't a deliberate `/clear`), it writes an `.unsynced` flag that the next SessionStart surfaces.
 8. **`/memory-sync`** writes a structured session note to the Obsidian vault, proposes learnings, appends decisions to the project's `_decisions.md` log, marks the session synced, and cleans up staging files.
 
