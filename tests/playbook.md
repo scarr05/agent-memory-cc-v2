@@ -102,6 +102,14 @@ Append to your baseline results file:
 
 Run before merging the handoff workflow. Gates 1–2 are scripted; 3–4 are live-session manual.
 
+> **First, run the Tier-1 regression suite against the _repo_ hooks, not the deployed copies.** `hook-validation.sh` defaults `HOOKS_DIR` to `~/.claude/hooks` (what is installed), which can lag the branch under review. Validate the code on the branch with:
+>
+> ```bash
+> HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" "$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' .claude/CLAUDE.md | head -1)"
+> ```
+>
+> Expect `39/39 passed — PASS`. Omitting `HOOKS_DIR=./hooks` runs the installed hooks instead and reports false failures until you redeploy them.
+
 ### Gate 1 — Transcript windowing (scripted)
 ```bash
 bash tests/handoff-lib-test.sh
