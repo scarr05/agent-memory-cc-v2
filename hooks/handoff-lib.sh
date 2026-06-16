@@ -110,4 +110,162 @@ read_live_tokens() {
     echo 0
 }
 
-# ---- CLI dispatcher (added in Task 6) ----
+# Print the lines between <!-- HANDOFF:<NAME>:START --> and its matching :END
+# marker (exclusive). One shared extractor so no reader depends on the
+# human-readable section header. NAME is e.g. NARRATIVE or DONOTREDO.
+extract_block() {
+    local name="$1" file="$2"
+    [[ -f "$file" ]] || return 0
+    # sub(/\r$/,"") strips a trailing CR so markers match on CRLF files (a Windows
+    # editor, or jq-written content, can introduce CR) regardless of which awk
+    # implementation is in use.
+    awk -v s="<!-- HANDOFF:${name}:START -->" -v e="<!-- HANDOFF:${name}:END -->" '
+        {sub(/\r$/,"")} $0==s {f=1; next} $0==e {f=0} f' "$file"
+}
+
+# Extract CC's own compaction summary (isCompactSummary:true). Content may be a
+# bare string or a [text] array, under either .message.content or a top-level
+# .content (the shape has varied across versions). Capped so a huge summary
+# cannot bloat the scratch.
+harvest_compact_summary() {
+    local t="$1"
+    [[ -f "$t" ]] || return 0
+    local s
+    s=$(grep '"isCompactSummary"' "$t" 2>/dev/null | tail -1 \
+        | jq -r '(.message.content // .content)
+                 | if type=="string" then .
+                   elif type=="array" then (.[] | if .type=="text" then .text else empty end)
+                   else empty end' 2>/dev/null \
+        | head -c 4000)
+    # Guarantee exactly one trailing newline so the START/END markers always sit on
+    # their own lines (head -c can truncate mid-line without one); empty => nothing.
+    [[ -n "$s" ]] && printf '%s\n' "$s"
+}
+
+# Assemble the deterministic handoff scratch. For source=handoff the narrative is
+# a fill sentinel Claude replaces in-context; for the fallbacks it is filled
+# deterministically (CC summary / a clear note) with no LLM call. The narrative
+# and do-not-redo blocks are wrapped in START/END comment markers so every reader
+# extracts them via extract_block, independent of the human header.
+# Args: --transcript T --slug S --source SRC --out OUT
+build_deterministic_handoff() {
+    local T="" SLUG="" SRC="handoff" OUT=""
+    while [[ $# -gt 0 ]]; do case "$1" in
+        --transcript) T="$2"; shift 2;;
+        --slug) SLUG="$2"; shift 2;;
+        --source) SRC="$2"; shift 2;;
+        --out) OUT="$2"; shift 2;;
+        *) shift;;
+    esac; done
+    [[ -n "$OUT" ]] || return 1
+    mkdir -p "$(dirname "$OUT")"
+
+    # Stream the window through a temp file (avoids buffering a multi-MB transcript
+    # in a shell variable). Every harvest helper below is abort-safe (guarded jq /
+    # || true), so build cannot die mid-way and orphan $win; the explicit rm at the
+    # end is the single cleanup path.
+    local win branch tokens created
+    win=$(mktemp)
+    window_transcript "$T" > "$win" 2>/dev/null || true
+    branch=$(git branch --show-current 2>/dev/null || echo "detached")
+    tokens=$(read_live_tokens "$T")
+    [[ "$tokens" =~ ^[0-9]+$ ]] || tokens=0
+    created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+    {
+        echo "---"
+        # Quote string scalars so a branch with /, :, #, [ or leading * stays valid YAML.
+        echo "slug: \"$SLUG\""
+        echo "branch: \"$branch\""
+        echo "created: \"$created\""
+        echo "source: \"$SRC\""
+        echo "live_tokens: $tokens"
+        echo "consumed: false"
+        echo 'supersedes: ""'
+        echo "---"
+        echo
+        echo "# Handoff — $SLUG ($branch)"
+        echo
+        echo "## Current Work — Narrative"
+        echo "<!-- HANDOFF:NARRATIVE:START -->"
+        case "$SRC" in
+            handoff)          echo "<!-- HANDOFF:NARRATIVE -->";;
+            compact-fallback) harvest_compact_summary "$T";;
+            *)                echo "Auto-harvested on bare /clear — no manual handoff was armed. Deterministic facts below.";;
+        esac
+        echo "<!-- HANDOFF:NARRATIVE:END -->"
+        echo
+        echo "## Do-Not-Redo"
+        echo "<!-- HANDOFF:DONOTREDO:START -->"
+        if [[ "$SRC" == "handoff" ]]; then echo "<!-- HANDOFF:DONOTREDO -->"; else echo "(none captured)"; fi
+        echo "<!-- HANDOFF:DONOTREDO:END -->"
+        echo
+        echo "## Git State"
+        harvest_git
+        echo
+        echo "## Files Touched (this work unit)"
+        harvest_files < "$win" | sed 's/^/- /'
+        echo
+        echo "## Open TODOs"
+        harvest_todos < "$win"
+        echo
+        echo "## Tagged Decisions / Corrections"
+        harvest_decisions < "$win"
+    } > "$OUT"
+
+    rm -f "$win"
+}
+
+# Finalise a handoff: enforce the empty/thin guard for manual handoffs, stamp
+# supersedes from any prior consumed file. Prints ARMED:/ABORTED:. Returns
+# non-zero on abort. Args: --out OUT --consumed CONSUMED_FILE
+finalize_handoff() {
+    local OUT="" CONSUMED=""
+    while [[ $# -gt 0 ]]; do case "$1" in
+        --out) OUT="$2"; shift 2;;
+        --consumed) CONSUMED="$2"; shift 2;;
+        *) shift;;
+    esac; done
+    [[ -f "$OUT" ]] || { echo "ABORTED: no handoff file at $OUT"; return 1; }
+
+    # source is a quoted scalar; tr strips the quotes AND any trailing CR (CRLF).
+    local src; src=$(sed -n 's/^source: //p' "$OUT" | head -1 | tr -d '\r"')
+    if [[ "$src" == "handoff" ]]; then
+        # Refuse to arm only if the narrative is still the EXACT fill sentinel
+        # (collapsed comment) or too thin — match the full collapsed comment, not a
+        # bare "HANDOFF:NARRATIVE" substring, so a real narrative that merely
+        # mentions the token still arms.
+        local narr
+        narr=$(extract_block NARRATIVE "$OUT" | tr -d '[:space:]')
+        if [[ "$narr" == *"<!--HANDOFF:NARRATIVE-->"* ]] || [[ "${#narr}" -lt 40 ]]; then
+            rm -f "$OUT"
+            echo "ABORTED: handoff narrative not filled — not armed."
+            return 1
+        fi
+    fi
+
+    if [[ -n "$CONSUMED" && -f "$CONSUMED" ]]; then
+        local prior; prior=$(sed -n 's/^created: //p' "$CONSUMED" | head -1 | tr -d '\r"')
+        if [[ -n "$prior" ]]; then
+            # Rewrite the supersedes line with awk: prior is passed as a literal
+            # variable, so no sed regex/replacement metacharacters (&, /, \) in the
+            # value can corrupt the output.
+            awk -v p="$prior" '!d && /^supersedes:/ {print "supersedes: \"" p "\""; d=1; next} {print}' \
+                "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+        fi
+    fi
+    echo "ARMED: $OUT"
+}
+
+# ---- CLI dispatcher ----
+# Lets the /handoff command drive the library: bash handoff-lib.sh <subcmd> [args]
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -euo pipefail
+    cmd="${1:-}"; shift || true
+    case "$cmd" in
+        build)    build_deterministic_handoff "$@";;
+        finalize) finalize_handoff "$@";;
+        tokens)   read_live_tokens "$@";;
+        *) echo "usage: handoff-lib.sh {build|finalize|tokens} ..." >&2; exit 2;;
+    esac
+fi
