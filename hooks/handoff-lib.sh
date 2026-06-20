@@ -78,14 +78,14 @@ harvest_tasks() {
     events=$(printf '%s\n' "$input" | jq -r '
         (select(.type=="assistant") | .message.content[]?
          | select(.type=="tool_use" and .name=="TaskCreate")
-         | "CREATE\t" + .id + "\t" + ((.input.subject // "untitled") | gsub("[\t\n]";" "))),
+         | "CREATE\t" + (.id | gsub("[\t\n]";" ")) + "\t" + ((.input.subject // "untitled") | gsub("[\t\n]";" "))),
         (select(.type=="user") | .message.content[]?
          | select(.type=="tool_result")
          | select((.taskId // "") != "")
-         | "RESULT\t" + .tool_use_id + "\t" + .taskId),
+         | "RESULT\t" + (.tool_use_id | gsub("[\t\n]";" ")) + "\t" + (.taskId | gsub("[\t\n]";" "))),
         (select(.type=="assistant") | .message.content[]?
          | select(.type=="tool_use" and .name=="TaskUpdate")
-         | "UPDATE\t" + .input.id + "\t" + (.input.status // "pending"))
+         | "UPDATE\t" + (.input.id | gsub("[\t\n]";" ")) + "\t" + ((.input.status // "pending") | gsub("[\t\n]";" ")))
     ' 2>/dev/null || true)
 
     # No TaskCreate events — fall back to legacy TodoWrite behaviour.
@@ -109,7 +109,7 @@ harvest_tasks() {
                     st = (taskid in status) ? status[taskid] : "pending"
                     if (st != "deleted") {
                         # defang any embedded HANDOFF marker in the subject
-                        gsub(/<!-- HANDOFF:[A-Za-z]+:(START|END) -->/, "[handoff-marker]", subj_raw)
+                        gsub(/<!-- HANDOFF:[A-Za-z0-9_-]+:(START|END) -->/, "[handoff-marker]", subj_raw)
                         if (st == "completed")       printf "- [x] %s\n", subj_raw
                         else if (st == "in_progress") printf "- [~] %s\n", subj_raw
                         else                          printf "- [ ] %s\n", subj_raw
@@ -191,7 +191,7 @@ harvest_compact_summary() {
                  | if type=="string" then .
                    elif type=="array" then (.[] | if .type=="text" then .text else empty end)
                    else empty end' 2>/dev/null \
-        | sed -E 's/<!-- HANDOFF:[A-Za-z]+:(START|END) -->/[handoff-marker]/g' \
+        | sed -E 's/<!-- HANDOFF:[A-Za-z0-9_-]+:(START|END) -->/[handoff-marker]/g' \
         | head -c 4000)
     # Guarantee exactly one trailing newline so the START/END markers always sit on
     # their own lines (head -c can truncate mid-line without one); empty => nothing.
@@ -316,13 +316,25 @@ finalize_handoff() {
         # so this pass LF-normalises the file when it runs. That is harmless — every
         # downstream reader is CR-tolerant, and the supersedes awk below already does the
         # same — so byte-for-byte line-ending preservation is not attempted here.
+        local tmp; tmp=$(mktemp "${OUT}.XXXXXX")
         awk '
-            { raw=$0; sub(/\r$/, "", $0) }
-            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):START -->$/ {inb=1; print raw; next}
-            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):END -->$/   {inb=0; print raw; next}
-            inb && (/^## / || /^<!-- HANDOFF:/)              {print " " raw; next}
-            {print raw}                                       # all other lines verbatim
-        ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+            NR==FNR {
+                ln=$0; sub(/\r$/,"",ln)
+                if (ln=="<!-- HANDOFF:NARRATIVE:START -->" && nStart==0) nStart=FNR
+                else if (ln=="<!-- HANDOFF:DONOTREDO:START -->" && dStart==0) dStart=FNR
+                if (dStart==0 && ln=="<!-- HANDOFF:NARRATIVE:END -->") nEnd=FNR
+                if (dStart>0  && ln=="<!-- HANDOFF:DONOTREDO:END -->") dEnd=FNR
+                next
+            }
+            {
+                raw=$0; ln=$0; sub(/\r$/,"",ln)
+                if (FNR==nStart || FNR==dStart || FNR==nEnd || FNR==dEnd) { print raw; next }
+                inN = (nStart>0 && nEnd>0 && FNR>nStart && FNR<nEnd)
+                inD = (dStart>0 && dEnd>0 && FNR>dStart && FNR<dEnd)
+                if ((inN || inD) && (ln ~ /^## / || ln ~ /^<!-- HANDOFF:/)) { print " " raw; next }
+                print raw
+            }
+        ' "$OUT" "$OUT" > "$tmp" && mv "$tmp" "$OUT"
     fi
 
     if [[ -n "$CONSUMED" && -f "$CONSUMED" ]]; then
@@ -331,8 +343,9 @@ finalize_handoff() {
             # Rewrite the supersedes line with awk: prior is passed as a literal
             # variable, so no sed regex/replacement metacharacters (&, /, \) in the
             # value can corrupt the output.
+            local tmp2; tmp2=$(mktemp "${OUT}.XXXXXX")
             awk -v p="$prior" '!d && /^supersedes:/ {print "supersedes: \"" p "\""; d=1; next} {print}' \
-                "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
+                "$OUT" > "$tmp2" && mv "$tmp2" "$OUT"
         fi
     fi
     echo "ARMED: $OUT"
