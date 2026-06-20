@@ -264,6 +264,22 @@ finalize_handoff() {
             echo "ABORTED: handoff narrative not filled — not armed."
             return 1
         fi
+        # Enforce the block-content constraint the hardened extract_block relies on:
+        # a filled body line that begins "## " or "<!-- HANDOFF:" would be read as a
+        # section boundary and silently truncate the block. Space-prefix any such
+        # BODY line (inside a NARRATIVE/DONOTREDO :START..:END span) so it is no longer
+        # line-anchored. The structural :START/:END markers themselves are printed
+        # verbatim and never prefixed. Manual-path analogue of the compaction-summary
+        # defang at the harvest_compact_summary helper.
+        # CR-normalise for matching only (same idiom as extract_block); print from the
+        # untouched `raw` copy so original line endings survive — no CRLF->LF rewrite.
+        awk '
+            { raw=$0; sub(/\r$/, "", $0) }
+            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):START -->$/ {inb=1; print raw; next}
+            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):END -->$/   {inb=0; print raw; next}
+            inb && (/^## / || /^<!-- HANDOFF:/)              {print " " raw; next}
+            {print raw}
+        ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
     fi
 
     if [[ -n "$CONSUMED" && -f "$CONSUMED" ]]; then

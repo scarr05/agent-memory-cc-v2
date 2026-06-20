@@ -72,12 +72,12 @@ cat "$HANDOFF"
 
 ## Step 3: Fill the narrative from your in-context knowledge
 
-You have the live conversation in context — do NOT re-read the transcript. Use the Edit tool on the handoff file to replace the two placeholders:
+You have the live conversation in context — do NOT re-read the transcript. Use the Edit tool on the handoff file to replace the two **fill sentinels**. Replace ONLY the collapsed sentinel line; never touch the surrounding `<!-- HANDOFF:NARRATIVE:START -->` / `:END` (or `:DONOTREDO:` `:START`/`:END`) markers — they delimit the block for every reader.
 
 1. Replace `<!-- HANDOFF:NARRATIVE -->` with 3–5 sentences: what we are mid-way through **right now**, why, and the **exact next action** a fresh agent should take first — file + line + intent (e.g. "Edit `hooks/session-start.sh:165` to add the clear-injection branch").
 2. Replace `<!-- HANDOFF:DONOTREDO -->` with the dead ends already ruled out this session, so the fresh agent does not repeat them. If none, write `- None.`
 
-Keep it tight. The deterministic sections already carry git state, touched files, TODOs, and tagged corrections — the narrative is only the irreducible "what/why/next".
+Keep it tight, and keep the body free of lines that begin `## ` or `<!-- HANDOFF:` — those read as section boundaries. (Finalise defangs any that slip through by space-prefixing them, so a slip degrades gracefully rather than truncating the block.) The deterministic sections already carry git state, touched files, and TODOs — the narrative is only the irreducible "what/why/next".
 
 ## Step 4: Finalise (thin-guard + supersedes)
 

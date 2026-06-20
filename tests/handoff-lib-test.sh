@@ -148,6 +148,61 @@ sed -i 's|<!-- HANDOFF:NARRATIVE -->|Next, replace the HANDOFF:NARRATIVE token i
 FIN_MENTION="$(finalize_handoff --out "$OUT" --consumed "$TMPD/none.md"; echo "rc=$?")"
 assert_contains "finalize arms narrative mentioning the token" "ARMED" "$FIN_MENTION"
 
+# --- Bug #1: finalize defangs boundary-looking lines inside the filled body ---
+# A filled narrative whose body contains a "## " line and a "<!-- HANDOFF:" line
+# would otherwise truncate under the hardened extract_block. finalize must space-
+# prefix those body lines (so extract returns the WHOLE body), leave the structural
+# :START/:END markers untouched, and still arm.
+DFG="$TMPD/defang.md"
+cat > "$DFG" <<'EOF'
+---
+slug: "demo-proj"
+branch: "main"
+created: "2026-06-19T00:00:00Z"
+source: "handoff"
+live_tokens: 1000
+consumed: false
+supersedes: ""
+---
+
+# Handoff — demo-proj (main)
+
+## Current Work — Narrative
+<!-- HANDOFF:NARRATIVE:START -->
+We are mid-way through the parser fix; this first line is intentionally long enough to clear the forty-character thin guard on its own.
+## A heading that looks like a section boundary
+<!-- HANDOFF:FAKE:START -->
+more narrative text after the fake marker line.
+<!-- HANDOFF:NARRATIVE:END -->
+
+## Do-Not-Redo
+<!-- HANDOFF:DONOTREDO:START -->
+- Do NOT re-run the old parser.
+<!-- HANDOFF:DONOTREDO:END -->
+
+## Git State
+Branch: `main` (0 dirty files)
+
+## Files Touched (this work unit)
+- 1 /src/handoff-lib.sh
+
+## Open TODOs
+EOF
+FIN_DFG="$(finalize_handoff --out "$DFG" --consumed "$TMPD/none.md"; echo "rc=$?")"
+assert_contains "defang: finalize still arms" "ARMED" "$FIN_DFG"
+# Body boundary-looking lines are space-prefixed (no longer line-anchored boundaries)...
+assert_eq "defang: ## body line is space-prefixed"        "0" "$(grep -c '^## A heading' "$DFG")"
+assert_eq "defang: ## body line present once, prefixed"   "1" "$(grep -c '^ ## A heading' "$DFG")"
+assert_eq "defang: fake marker line is space-prefixed"    "0" "$(grep -c '^<!-- HANDOFF:FAKE:START -->' "$DFG")"
+assert_eq "defang: fake marker present once, prefixed"    "1" "$(grep -c '^ <!-- HANDOFF:FAKE:START -->' "$DFG")"
+# ...structural markers are intact (exactly one each, unprefixed)...
+assert_eq "defang: NARRATIVE:START intact" "1" "$(grep -c '^<!-- HANDOFF:NARRATIVE:START -->' "$DFG")"
+assert_eq "defang: NARRATIVE:END intact"   "1" "$(grep -c '^<!-- HANDOFF:NARRATIVE:END -->' "$DFG")"
+# ...and extract_block now returns the WHOLE body (no truncation at the ## line).
+DFG_EXTRACT="$(extract_block NARRATIVE "$DFG")"
+assert_contains "defang: extract keeps the prefixed heading"   " ## A heading"                       "$DFG_EXTRACT"
+assert_contains "defang: extract keeps post-marker text"        "more narrative text after the fake" "$DFG_EXTRACT"
+
 # compact-fallback embeds CC's isCompactSummary instead of the fill sentinel...
 OUT2="$TMPD/compact.md"
 printf '%s\n' '{"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued from a previous conversation about the harvester."}}' > "$TMPD/compact.jsonl"
