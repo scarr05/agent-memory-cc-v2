@@ -78,7 +78,7 @@ harvest_tasks() {
     events=$(printf '%s\n' "$input" | jq -r '
         (select(.type=="assistant") | .message.content[]?
          | select(.type=="tool_use" and .name=="TaskCreate")
-         | "CREATE\t" + .id + "\t" + (.input.subject // "untitled")),
+         | "CREATE\t" + .id + "\t" + ((.input.subject // "untitled") | gsub("[\t\n]";" "))),
         (select(.type=="user") | .message.content[]?
          | select(.type=="tool_result")
          | select((.taskId // "") != "")
@@ -101,6 +101,8 @@ harvest_tasks() {
         END {
             for (i=1; i<=n; i++) {
                 tuid = order[i]
+                # Only emit tasks whose RESULT linked a taskId; an unlinked CREATE has no
+                # identity to carry a status, so it is intentionally dropped.
                 if (tuid in tid) {
                     taskid = tid[tuid]
                     subj_raw = subj[tuid]
@@ -269,8 +271,8 @@ build_deterministic_handoff() {
 
     rm -f "$win"
     # The file is always fully assembled above; the trailing harvest helper's exit
-    # code (grep/jq return non-zero on a legitimately-empty section, e.g. no tagged
-    # decisions) must not leak as the function's status. The unguarded /handoff CLI
+    # code (grep/jq return non-zero on a legitimately-empty section, e.g. no tasks)
+    # must not leak as the function's status. The unguarded /handoff CLI
     # path runs under `set -e`, where a non-zero return would spuriously fail an
     # otherwise-valid build. Assembly succeeded — return success explicitly.
     return 0
@@ -309,8 +311,11 @@ finalize_handoff() {
         # line-anchored. The structural :START/:END markers themselves are printed
         # verbatim and never prefixed. Manual-path analogue of the compaction-summary
         # defang at the harvest_compact_summary helper.
-        # CR-normalise for matching only (same idiom as extract_block); print from the
-        # untouched `raw` copy so original line endings survive — no CRLF->LF rewrite.
+        # CR-normalise for matching only (same idiom as extract_block). NOTE: gawk in
+        # text mode (this repo's Windows/Git-Bash platform) strips a trailing CR on read,
+        # so this pass LF-normalises the file when it runs. That is harmless — every
+        # downstream reader is CR-tolerant, and the supersedes awk below already does the
+        # same — so byte-for-byte line-ending preservation is not attempted here.
         awk '
             { raw=$0; sub(/\r$/, "", $0) }
             /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):START -->$/ {inb=1; print raw; next}

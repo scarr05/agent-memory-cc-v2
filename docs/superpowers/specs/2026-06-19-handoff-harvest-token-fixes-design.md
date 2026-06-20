@@ -85,6 +85,7 @@ The manual narrative / do-not-redo are filled *in-context* by Claude after `buil
 - A stateful awk tracks whether the current line is inside the NARRATIVE or DONOTREDO block *body* (between that block's `:START` and `:END`).
 - For body lines only — never the structural `:START`/`:END` markers — any line beginning `## ` or `<!-- HANDOFF:` is rewritten by prefixing a single space, so the hardened `extract_block` no longer reads it as a section boundary.
 - Normal narratives (3–5 prose sentences, do-not-redo bullets starting `- `) contain no such lines, so the pass is a no-op in the common case — no behavioural change there.
+- **Note (post-implementation):** matching is CR-normalised; gawk in text mode (this repo's Windows/Git-Bash platform) strips a trailing CR on read, so this pass LF-normalises the file when it runs. That is harmless — every downstream reader is CR-tolerant, and the `supersedes` awk below already does the same.
 
 This is the manual-path analogue of the marker-defang already applied to the compaction summary at `hooks/handoff-lib.sh:148`. Together with the hardened parser it converts the block-content constraint from "documented in `handoff.md`" to "enforced in code", closing codex's PT1/PT4/PT5 findings.
 

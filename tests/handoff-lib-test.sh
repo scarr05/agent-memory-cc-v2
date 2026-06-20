@@ -95,6 +95,19 @@ assert_not_contains "tasks: marker-in-subject defanged (raw marker absent)"  "<!
 assert_contains     "tasks: marker-in-subject defanged (placeholder present)" "[handoff-marker]"              "$TASKS_MARK"
 rm -f "$TMARK"
 
+# Control-char in subject: a TaskCreate whose subject contains an embedded tab or
+# newline must not corrupt the TSV event stream. The subject is sanitised before
+# the tab-joined projection; control chars become spaces so nothing after the tab
+# or newline is lost.
+TCTRL="$(mktemp)"
+printf '%s\n' \
+  '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"tu_ctrl1","name":"TaskCreate","input":{"subject":"Fix\ttab\nand newline bug"}}]}}' \
+  '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_ctrl1","content":[{"type":"text","text":"Task #ctrl created"}],"taskId":"task-ctrl-1"}]}}' > "$TCTRL"
+TASKS_CTRL="$(harvest_tasks < "$TCTRL")"
+assert_contains "tasks: tab in subject becomes space"     "Fix tab" "$TASKS_CTRL"
+assert_contains "tasks: text after newline not lost"      "and newline bug" "$TASKS_CTRL"
+rm -f "$TCTRL"
+
 # read_live_tokens: sum of the LAST usage-bearing assistant entry (150000+2000+3000)
 TOK="$(read_live_tokens "$FIX")"
 assert_eq "live tokens = last usage entry sum" "155000" "$TOK"
