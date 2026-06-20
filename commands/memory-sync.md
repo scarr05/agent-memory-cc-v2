@@ -62,7 +62,7 @@ cat ~/.claude/memory-staging/<slug>/handoff.md 2>/dev/null
 cat ~/.claude/memory-staging/<slug>/handoff.consumed.md 2>/dev/null
 ```
 
-2. Extract this effort's **fingerprint**: the `## Files Touched (this work unit)` list plus the `## Tagged Decisions / Corrections` lines.
+2. Extract this effort's **fingerprint**: the `## Files Touched (this work unit)` list. (File-list overlap across consecutive sessions is the effort matcher — see step 3.)
 
 3. Search the vault for an existing session note from the **same effort** (overlapping file list — the same files touched across consecutive sessions signal one continuous effort):
 
@@ -182,13 +182,13 @@ If you spot an EXISTING learning that should be updated:
 - Show the user the current version and proposed change
 - Update after approval
 
-**Direction-change corrections (from the handoff scratch):** the handoff's `## Tagged Decisions / Corrections` section is non-empty only when the direction shifted this effort. For each line there that is not already in `5 Agent Memory/learnings/corrections/`:
+**Direction-change corrections (from the handoff scratch):** the handoff's `## Do-Not-Redo` block (between its `<!-- HANDOFF:DONOTREDO:START -->` / `:END` markers) records the dead-ends and direction shifts of this effort — the clean, authoritative channel. For each line in that block that is not already in `5 Agent Memory/learnings/corrections/`:
 
 ```
 search_notes(query="<key phrase from the correction>", searchContent=true)
 ```
 
-If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it in future sessions whenever a prompt touches that topic (its index is rebuilt at SessionStart). A correction counts as "new" when the current handoff's corrections differ from the prior `.consumed` handoff's.
+If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it in future sessions whenever a prompt touches that topic (its index is rebuilt at SessionStart). A correction counts as "new" when the current handoff's Do-Not-Redo lines differ from the prior `.consumed` handoff's.
 
 ### Step 5: Update Project Index
 

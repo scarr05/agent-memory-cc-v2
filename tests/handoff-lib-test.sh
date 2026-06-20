@@ -56,13 +56,6 @@ assert_contains "most-frequent file is the lib" "/src/handoff-lib.sh" "$TOPFILE"
 GIT="$(harvest_git)"
 assert_contains "git emits Branch" "Branch:" "$GIT"
 
-# harvest_decisions: tags correction/decision language from BOTH string and
-# [{type:text}] user messages; ignores tool_result-only messages.
-DEC="$(window_transcript "$FIX" | harvest_decisions)"
-assert_contains "decisions: string-form correction" "switch to the deterministic harvester" "$DEC"
-assert_contains "decisions: array-text correction"  "threshold should be 150k" "$DEC"
-assert_not_contains "decisions: drops tool_result"  "ignore me" "$DEC"
-
 # harvest_todos: pending/in-progress items from the LAST TodoWrite; drops completed
 TODOS="$(window_transcript "$FIX" | harvest_todos)"
 assert_contains "todos keeps pending"        "wire the clear branch" "$TODOS"
@@ -227,8 +220,11 @@ printf '%s\n' \
   '{"type":"user","message":{"content":"add a date helper please"}}' \
   '{"type":"assistant","message":{"content":[{"type":"text","text":"Added it."}]}}' > "$PLAIN"
 RC_BUILD=0; bash "$LIBSH" build --transcript "$PLAIN" --slug "demo-proj" --source handoff --out "$OUT4" || RC_BUILD=$?
-assert_eq "build CLI exits 0 with no tagged decisions" "0" "$RC_BUILD"
-assert_contains "build CLI still writes the last section" "## Tagged Decisions / Corrections" "$(cat "$OUT4")"
+assert_eq "build CLI exits 0 with no open todos" "0" "$RC_BUILD"
+assert_not_contains "build CLI drops the decisions section" "## Tagged Decisions / Corrections" "$(cat "$OUT4")"
+# Assert the last SECTION heading is Open TODOs. Scope to headings AFTER the
+# narrative END marker so a heading-bearing narrative could never spoof it.
+assert_eq "build CLI: Open TODOs is the final section" "## Open TODOs" "$(awk '/<!-- HANDOFF:NARRATIVE:END -->/{f=1;next} f' "$OUT4" | grep '^## ' | tail -1)"
 
 # Same guarantee for compact-fallback when CC left no isCompactSummary line: the
 # mid-assembly harvest_compact_summary must not truncate the file or fail the build.
@@ -236,7 +232,8 @@ NOSUMM="$TMPD/nosumm.jsonl"; OUT5="$TMPD/nosumm-handoff.md"
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"ordinary turn, no summary"}]}}' > "$NOSUMM"
 RC_CF=0; bash "$LIBSH" build --transcript "$NOSUMM" --slug "demo-proj" --source compact-fallback --out "$OUT5" || RC_CF=$?
 assert_eq "compact-fallback CLI exits 0 with no summary" "0" "$RC_CF"
-assert_contains "compact-fallback still writes the last section" "## Tagged Decisions / Corrections" "$(cat "$OUT5")"
+assert_not_contains "compact-fallback drops the decisions section" "## Tagged Decisions / Corrections" "$(cat "$OUT5")"
+assert_eq "compact-fallback: Open TODOs is the final section" "## Open TODOs" "$(awk '/<!-- HANDOFF:NARRATIVE:END -->/{f=1;next} f' "$OUT5" | grep '^## ' | tail -1)"
 
 # Security regression (marker injection): a compaction summary that embeds the block
 # markers must not forge the narrative boundaries. harvest_compact_summary defangs any

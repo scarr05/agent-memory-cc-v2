@@ -60,25 +60,6 @@ harvest_git() {
     git log --oneline -3 2>/dev/null | sed 's/^/- /' || true
 }
 
-# Tagged decisions/corrections from user messages this work unit. Reads windowed
-# JSONL on stdin. Handles polymorphic content (bare string | [text] | [tool_result])
-# — tool_result-only messages yield nothing. Strips a leading slash-command token
-# so "/handoff actually do X" still surfaces "actually do X".
-harvest_decisions() {
-    jq -r 'select(.type=="user") | .message.content
-           | if type=="string" then .
-             elif type=="array" then (.[]
-                 | if type=="string" then .
-                   elif (.type=="text") then .text
-                   else empty end)
-             else empty end' 2>/dev/null \
-        | sed -E 's#^/[a-z][a-z-]* ##' \
-        | { grep -iE "actually|\bno,|wrong|incorrect|not right|stop doing|i meant|i prefer|always use|never use|from now on|let's go with|i decided|we're using|switch to|we agreed" || true; } \
-        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
-        | awk 'length > 0 && length < 300' \
-        | head -15
-}
-
 # Open TODOs from the LAST TodoWrite this work unit (later arrays supersede
 # earlier ones). Reads windowed JSONL on stdin. Drops completed items.
 harvest_todos() {
@@ -224,9 +205,6 @@ build_deterministic_handoff() {
         echo
         echo "## Open TODOs"
         harvest_todos < "$win"
-        echo
-        echo "## Tagged Decisions / Corrections"
-        harvest_decisions < "$win"
     } > "$OUT"
 
     rm -f "$win"
