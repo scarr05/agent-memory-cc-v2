@@ -188,7 +188,7 @@ if [[ "$SOURCE" == "clear" ]]; then
             # Extract only the open/in-progress tasks ([~] and [ ]) for native restore.
             # Completed tasks ([x]) are historical record only and are not re-created.
             OPEN_TASKS=$(extract_block TASKS "$HANDOFF_FILE" 2>/dev/null \
-                | grep -E '^\- \[(~| )\] ' || true)
+                | grep -E '^\- \[[~ ]\] ' || true)
             CONTEXT="## RESUMING FROM HANDOFF — \`$SLUG\`\\n"
             CONTEXT+="A handoff scratch from the prior session is being restored. Full file: \`$HANDOFF_FILE\`\\n\\n"
             CONTEXT+="$(printf '%s' "$NARR" | sed 's/$/\\n/' | tr -d '\n')\\n"

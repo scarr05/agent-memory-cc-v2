@@ -161,7 +161,7 @@ extract_block() {
     # editor, or jq-written content, can introduce CR) regardless of which awk
     # implementation is in use.
     awk -v s="<!-- HANDOFF:${name}:START -->" -v e="<!-- HANDOFF:${name}:END -->" '
-        {sub(/\r$/,"")}                         # CRLF tolerance (unchanged)
+        {sub(/\r$/,"")}                         # CRLF tolerance
         $0==s                              {f=1; next}   # enter block on START
         f && $0==e                         {exit}        # normal: stop at END
         f && (/^## / || /^<!-- HANDOFF:/)  {exit}        # fallback: stop at next section/marker
@@ -321,7 +321,7 @@ finalize_handoff() {
             /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):START -->$/ {inb=1; print raw; next}
             /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):END -->$/   {inb=0; print raw; next}
             inb && (/^## / || /^<!-- HANDOFF:/)              {print " " raw; next}
-            {print raw}
+            {print raw}                                       # all other lines verbatim
         ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
     fi
 
