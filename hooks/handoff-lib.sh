@@ -60,6 +60,64 @@ harvest_git() {
     git log --oneline -3 2>/dev/null | sed 's/^/- /' || true
 }
 
+# End-of-session task list from native TaskCreate/TaskUpdate events. Reads windowed
+# JSONL on stdin. Reconstructs final status by replaying events in order:
+#   CREATE  — records (tool_use_id -> subject)
+#   RESULT  — links (tool_use_id -> taskId) via the taskId field on the tool_result
+#   UPDATE  — advances (taskId -> status); last update wins
+# Status symbols: [x] completed, [~] in_progress, [ ] pending. Deleted tasks omitted.
+# Subjects containing <!-- HANDOFF: markers are defanged to [handoff-marker] to stop
+# a rogue subject line from forging a block boundary in the handoff file.
+# Falls back to harvest_todos behaviour when no TaskCreate events are found.
+harvest_tasks() {
+    local input; input=$(cat)
+    [[ -n "$input" ]] || return 0
+
+    # Emit tab-separated event lines for awk to replay.
+    local events
+    events=$(printf '%s\n' "$input" | jq -r '
+        (select(.type=="assistant") | .message.content[]?
+         | select(.type=="tool_use" and .name=="TaskCreate")
+         | "CREATE\t" + .id + "\t" + (.input.subject // "untitled")),
+        (select(.type=="user") | .message.content[]?
+         | select(.type=="tool_result")
+         | select((.taskId // "") != "")
+         | "RESULT\t" + .tool_use_id + "\t" + .taskId),
+        (select(.type=="assistant") | .message.content[]?
+         | select(.type=="tool_use" and .name=="TaskUpdate")
+         | "UPDATE\t" + .input.id + "\t" + (.input.status // "pending"))
+    ' 2>/dev/null || true)
+
+    # No TaskCreate events — fall back to legacy TodoWrite behaviour.
+    if ! printf '%s\n' "$events" | grep -q $'^CREATE\t'; then
+        printf '%s\n' "$input" | harvest_todos
+        return 0
+    fi
+
+    printf '%s\n' "$events" | awk -F'\t' '
+        $1=="CREATE" { subj[$2]=$3; order[++n]=$2 }
+        $1=="RESULT" { tid[$2]=$3 }
+        $1=="UPDATE" { status[$2]=$3 }
+        END {
+            for (i=1; i<=n; i++) {
+                tuid = order[i]
+                if (tuid in tid) {
+                    taskid = tid[tuid]
+                    subj_raw = subj[tuid]
+                    st = (taskid in status) ? status[taskid] : "pending"
+                    if (st != "deleted") {
+                        # defang any embedded HANDOFF marker in the subject
+                        gsub(/<!-- HANDOFF:[A-Za-z]+:(START|END) -->/, "[handoff-marker]", subj_raw)
+                        if (st == "completed")       printf "- [x] %s\n", subj_raw
+                        else if (st == "in_progress") printf "- [~] %s\n", subj_raw
+                        else                          printf "- [ ] %s\n", subj_raw
+                    }
+                }
+            }
+        }
+    ' || true
+}
+
 # Open TODOs from the LAST TodoWrite this work unit (later arrays supersede
 # earlier ones). Reads windowed JSONL on stdin. Drops completed items.
 harvest_todos() {
@@ -203,8 +261,10 @@ build_deterministic_handoff() {
         echo "## Files Touched (this work unit)"
         harvest_files < "$win" | sed 's/^/- /'
         echo
-        echo "## Open TODOs"
-        harvest_todos < "$win"
+        echo "## Tasks"
+        echo "<!-- HANDOFF:TASKS:START -->"
+        harvest_tasks < "$win"
+        echo "<!-- HANDOFF:TASKS:END -->"
     } > "$OUT"
 
     rm -f "$win"
