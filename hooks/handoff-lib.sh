@@ -120,7 +120,12 @@ extract_block() {
     # editor, or jq-written content, can introduce CR) regardless of which awk
     # implementation is in use.
     awk -v s="<!-- HANDOFF:${name}:START -->" -v e="<!-- HANDOFF:${name}:END -->" '
-        {sub(/\r$/,"")} $0==s {f=1; next} $0==e {f=0} f' "$file"
+        {sub(/\r$/,"")}                         # CRLF tolerance (unchanged)
+        $0==s                              {f=1; next}   # enter block on START
+        f && $0==e                         {exit}        # normal: stop at END
+        f && (/^## / || /^<!-- HANDOFF:/)  {exit}        # fallback: stop at next section/marker
+        f                                                # print body lines
+    ' "$file"
 }
 
 # Extract CC's own compaction summary (isCompactSummary:true). Content may be a

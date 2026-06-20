@@ -73,6 +73,36 @@ assert_not_contains "todos drops completed"  "old finished thing" "$TODOS"
 TOK="$(read_live_tokens "$FIX")"
 assert_eq "live tokens = last usage entry sum" "155000" "$TOK"
 
+# --- Bug #1: extract_block must not overflow its section when :END is missing ---
+# Missing :END — extract stops at the next "## " heading, not EOF.
+EB1="$(mktemp)"
+printf '%s\n' \
+  '## Current Work — Narrative' \
+  '<!-- HANDOFF:NARRATIVE:START -->' \
+  'body line one' \
+  'body line two' \
+  '## Do-Not-Redo' \
+  '<!-- HANDOFF:DONOTREDO:START -->' \
+  'should not appear' > "$EB1"
+EB1_OUT="$(extract_block NARRATIVE "$EB1")"
+assert_eq          "extract stops at next ## when :END missing" "$(printf '%s\n%s' 'body line one' 'body line two')" "$EB1_OUT"
+assert_not_contains "extract excludes the ## boundary line"      "Do-Not-Redo"     "$EB1_OUT"
+assert_not_contains "extract does not overflow to later blocks"  "should not appear" "$EB1_OUT"
+rm -f "$EB1"
+
+# Regression: a well-formed :START/:END block extracts exactly its body (boundary
+# lines excluded), byte-for-byte — the hardening must not alter the normal path.
+EB2="$(mktemp)"
+printf '%s\n' \
+  '<!-- HANDOFF:NARRATIVE:START -->' \
+  'alpha' \
+  'beta' \
+  '<!-- HANDOFF:NARRATIVE:END -->' \
+  'trailing content outside the block' > "$EB2"
+assert_eq "extract returns exact body for well-formed block" "$(printf '%s\n%s' 'alpha' 'beta')" "$(extract_block NARRATIVE "$EB2")"
+assert_not_contains "extract excludes trailing content" "trailing content" "$(extract_block NARRATIVE "$EB2")"
+rm -f "$EB2"
+
 # build_deterministic_handoff (source=handoff) writes QUOTED frontmatter + a
 # marker-delimited narrative placeholder + deterministic sections.
 TMPD="$(mktemp -d)"
@@ -88,8 +118,11 @@ assert_contains "build: narrative fill sentinel" "<!-- HANDOFF:NARRATIVE -->" "$
 assert_contains "build: files section populated" "/src/handoff-lib.sh" "$BODY"
 assert_contains "build: consumed false"          "consumed: false" "$BODY"
 
-# extract_block returns only the lines between the markers (exclusive)
-assert_contains "extract_block: unfilled => sentinel" "<!-- HANDOFF:NARRATIVE -->" "$(extract_block NARRATIVE "$OUT")"
+# extract_block returns only the lines between the markers (exclusive). On an
+# unfilled handoff the body IS the bare sentinel, which is itself a <!-- HANDOFF:
+# boundary line, so the hardened parser stops before printing it => empty extract.
+# finalize_handoff's length<40 guard then aborts arming (see the unfilled test below).
+assert_eq "extract_block: unfilled => empty (sentinel is a boundary)" "" "$(extract_block NARRATIVE "$OUT")"
 
 # finalize refuses to arm an unfilled handoff (sentinel still between markers)
 FIN_UNFILLED="$(finalize_handoff --out "$OUT" --consumed "$TMPD/none.md"; echo "rc=$?")"
