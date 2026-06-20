@@ -156,7 +156,7 @@ git commit -m "harden: bound extract_block to its own section when :END is missi
 
 **Context for the implementer:** The manual narrative is filled *in-context* by Claude after the build step, so it cannot be defanged at build time. `finalize_handoff` is the gate before arming and already rewrites the file (for `supersedes`). The defang pass goes inside the existing `if [[ "$src" == "handoff" ]]; then ... fi` branch, **after** the thin-guard `if` block (so it never runs on an unfilled sentinel — the guard aborts first) and **before** the `supersedes` stamping. This is the manual-path analogue of the marker-defang already applied to the compaction summary at `hooks/handoff-lib.sh:148`.
 
-The defang awk must distinguish structural markers (`NARRATIVE`/`DONOTREDO` `:START`/`:END`) from body lines: it tracks an in-body flag, prints the structural markers verbatim, and only space-prefixes boundary-looking lines while in-body. It tolerates an optional trailing CR on the marker lines and reprints every other line verbatim (no global line-ending rewrite).
+The defang awk must distinguish structural markers (`NARRATIVE`/`DONOTREDO` `:START`/`:END`) from body lines: it tracks an in-body flag, prints the structural markers verbatim, and only space-prefixes boundary-looking lines while in-body. It normalises a trailing CR **for matching only** — mirroring `extract_block`'s `sub(/\r$/,"")` (the one CR idiom already proven portable in this file) — but reprints each line from an unmodified copy (`raw`), so original line endings are preserved and the pass never rewrites CRLF→LF across the whole file. (Do NOT embed `\r?$` in the match patterns; that relies on `\r` being honoured inside a match regex, which is not POSIX-defined.)
 
 - [ ] **Step 1: Write the failing test**
 
@@ -266,11 +266,14 @@ Add the defang pass after the thin-guard `if`/`fi`, still inside the `src == han
         # line-anchored. The structural :START/:END markers themselves are printed
         # verbatim and never prefixed. Manual-path analogue of the compaction-summary
         # defang at the harvest_compact_summary helper.
+        # CR-normalise for matching only (same idiom as extract_block); print from the
+        # untouched `raw` copy so original line endings survive — no CRLF->LF rewrite.
         awk '
-            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):START -->\r?$/ {inb=1; print; next}
-            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):END -->\r?$/   {inb=0; print; next}
-            inb && (/^## / || /^<!-- HANDOFF:/)                 {print " " $0; next}
-            {print}
+            { raw=$0; sub(/\r$/, "", $0) }
+            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):START -->$/ {inb=1; print raw; next}
+            /^<!-- HANDOFF:(NARRATIVE|DONOTREDO):END -->$/   {inb=0; print raw; next}
+            inb && (/^## / || /^<!-- HANDOFF:/)              {print " " raw; next}
+            {print raw}
         ' "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
     fi
 ```
@@ -356,7 +359,9 @@ Replace with:
 ```bash
 assert_eq "build CLI exits 0 with no open todos" "0" "$RC_BUILD"
 assert_not_contains "build CLI drops the decisions section" "## Tagged Decisions / Corrections" "$(cat "$OUT4")"
-assert_eq "build CLI: Open TODOs is the final section" "## Open TODOs" "$(grep '^## ' "$OUT4" | tail -1)"
+# Assert the last SECTION heading is Open TODOs. Scope to headings AFTER the
+# narrative END marker so a heading-bearing narrative could never spoof it.
+assert_eq "build CLI: Open TODOs is the final section" "## Open TODOs" "$(awk '/<!-- HANDOFF:NARRATIVE:END -->/{f=1;next} f' "$OUT4" | grep '^## ' | tail -1)"
 ```
 
 **(c)** Update the `compact-fallback` last-section assertion. Currently (lines 150-151):
@@ -371,7 +376,7 @@ Replace with:
 ```bash
 assert_eq "compact-fallback CLI exits 0 with no summary" "0" "$RC_CF"
 assert_not_contains "compact-fallback drops the decisions section" "## Tagged Decisions / Corrections" "$(cat "$OUT5")"
-assert_eq "compact-fallback: Open TODOs is the final section" "## Open TODOs" "$(grep '^## ' "$OUT5" | tail -1)"
+assert_eq "compact-fallback: Open TODOs is the final section" "## Open TODOs" "$(awk '/<!-- HANDOFF:NARRATIVE:END -->/{f=1;next} f' "$OUT5" | grep '^## ' | tail -1)"
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
