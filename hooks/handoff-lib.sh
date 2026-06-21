@@ -68,14 +68,10 @@ harvest_git() {
 # Status symbols: [x] completed, [~] in_progress, [ ] pending. Deleted tasks omitted.
 # Subjects containing <!-- HANDOFF: markers are defanged to [handoff-marker] to stop
 # a rogue subject line from forging a block boundary in the handoff file.
-# Falls back to harvest_todos behaviour when no TaskCreate events are found.
 harvest_tasks() {
-    local input; input=$(cat)
-    [[ -n "$input" ]] || return 0
-
     # Emit tab-separated event lines for awk to replay.
     local events
-    events=$(printf '%s\n' "$input" | jq -r '
+    events=$(jq -r '
         (select(.type=="assistant") | .message.content[]?
          | select(.type=="tool_use" and .name=="TaskCreate")
          | "CREATE\t" + (.id | gsub("[\t\n]";" ")) + "\t" + ((.input.subject // "untitled") | gsub("[\t\n]";" "))),
@@ -87,12 +83,6 @@ harvest_tasks() {
          | select(.type=="tool_use" and .name=="TaskUpdate")
          | "UPDATE\t" + (.input.id | gsub("[\t\n]";" ")) + "\t" + ((.input.status // "pending") | gsub("[\t\n]";" ")))
     ' 2>/dev/null || true)
-
-    # No TaskCreate events — fall back to legacy TodoWrite behaviour.
-    if ! printf '%s\n' "$events" | grep -q $'^CREATE\t'; then
-        printf '%s\n' "$input" | harvest_todos
-        return 0
-    fi
 
     printf '%s\n' "$events" | awk -F'\t' '
         $1=="CREATE" { subj[$2]=$3; order[++n]=$2 }
@@ -118,18 +108,6 @@ harvest_tasks() {
             }
         }
     ' || true
-}
-
-# Open TODOs from the LAST TodoWrite this work unit (later arrays supersede
-# earlier ones). Reads windowed JSONL on stdin. Drops completed items.
-harvest_todos() {
-    local last
-    last=$(jq -c 'select(.type=="assistant") | .message.content[]?
-                  | select(.type=="tool_use" and .name=="TodoWrite") | .input.todos' 2>/dev/null \
-           | tail -1 || true)
-    [[ -n "$last" ]] || return 0
-    printf '%s' "$last" \
-        | jq -r '.[] | select(.status != "completed") | "- [ ] " + (.content // .activeForm // "task")' 2>/dev/null || true
 }
 
 # Live context size = the LAST usage-bearing assistant entry's

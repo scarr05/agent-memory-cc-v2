@@ -56,12 +56,6 @@ assert_contains "most-frequent file is the lib" "/src/handoff-lib.sh" "$TOPFILE"
 GIT="$(harvest_git)"
 assert_contains "git emits Branch" "Branch:" "$GIT"
 
-# harvest_todos: pending/in-progress items from the LAST TodoWrite; drops completed
-TODOS="$(window_transcript "$FIX" | harvest_todos)"
-assert_contains "todos keeps pending"        "wire the clear branch" "$TODOS"
-assert_contains "todos keeps in_progress"    "benchmark the token read" "$TODOS"
-assert_not_contains "todos drops completed"  "old finished thing" "$TODOS"
-
 # harvest_tasks: reconstruct end-of-session task state from TaskCreate/TaskUpdate events.
 # Fixture: transcript-tasks.jsonl has 4 tasks — one in_progress, one pending (untouched),
 # one completed, one deleted. Expected: in_progress shown as [~], pending as [ ],
@@ -73,14 +67,7 @@ assert_contains     "tasks: pending shown as [ ]"         "- [ ] Benchmark the t
 assert_contains     "tasks: completed shown as [x]"       "- [x] Old finished thing"        "$TASKS"
 assert_not_contains "tasks: deleted task omitted"         "Deleted task subject"            "$TASKS"
 
-# TodoWrite fallback: when no TaskCreate events exist, harvest_tasks behaves like
-# harvest_todos (reads last TodoWrite; drops completed; uses [ ] for all non-completed).
-TASKS_FB="$(window_transcript "$FIX" | harvest_tasks)"
-assert_contains     "tasks fallback: pending from TodoWrite"     "- [ ] wire the clear branch"    "$TASKS_FB"
-assert_contains     "tasks fallback: in_progress from TodoWrite" "- [ ] benchmark the token read" "$TASKS_FB"
-assert_not_contains "tasks fallback: drops completed"            "old finished thing"             "$TASKS_FB"
-
-# Empty: no TaskCreate, no TodoWrite => empty output (no rc leak).
+# Empty: no TaskCreate events => empty output (no rc leak).
 TASKS_EMPTY="$(printf '{"type":"user","message":{"content":"hello"}}\n' | harvest_tasks)"
 assert_eq "tasks empty input => empty output" "" "$TASKS_EMPTY"
 
