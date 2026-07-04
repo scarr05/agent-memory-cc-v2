@@ -60,56 +60,6 @@ harvest_git() {
     git log --oneline -3 2>/dev/null | sed 's/^/- /' || true
 }
 
-# End-of-session task list from native TaskCreate/TaskUpdate events. Reads windowed
-# JSONL on stdin. Reconstructs final status by replaying events in order:
-#   CREATE  — records (tool_use_id -> subject)
-#   RESULT  — links (tool_use_id -> taskId) via the taskId field on the tool_result
-#   UPDATE  — advances (taskId -> status); last update wins
-# Status symbols: [x] completed, [~] in_progress, [ ] pending. Deleted tasks omitted.
-# Subjects containing <!-- HANDOFF: markers are defanged to [handoff-marker] to stop
-# a rogue subject line from forging a block boundary in the handoff file.
-harvest_tasks() {
-    # Emit tab-separated event lines for awk to replay.
-    local events
-    events=$(jq -r '
-        (select(.type=="assistant") | .message.content[]?
-         | select(.type=="tool_use" and .name=="TaskCreate")
-         | "CREATE\t" + (.id | gsub("[\t\n]";" ")) + "\t" + ((.input.subject // "untitled") | gsub("[\t\n]";" "))),
-        (select(.type=="user") | .message.content[]?
-         | select(.type=="tool_result")
-         | select((.taskId // "") != "")
-         | "RESULT\t" + (.tool_use_id | gsub("[\t\n]";" ")) + "\t" + (.taskId | gsub("[\t\n]";" "))),
-        (select(.type=="assistant") | .message.content[]?
-         | select(.type=="tool_use" and .name=="TaskUpdate")
-         | "UPDATE\t" + (.input.id | gsub("[\t\n]";" ")) + "\t" + ((.input.status // "pending") | gsub("[\t\n]";" ")))
-    ' 2>/dev/null || true)
-
-    printf '%s\n' "$events" | awk -F'\t' '
-        $1=="CREATE" { subj[$2]=$3; order[++n]=$2 }
-        $1=="RESULT" { tid[$2]=$3 }
-        $1=="UPDATE" { status[$2]=$3 }
-        END {
-            for (i=1; i<=n; i++) {
-                tuid = order[i]
-                # Only emit tasks whose RESULT linked a taskId; an unlinked CREATE has no
-                # identity to carry a status, so it is intentionally dropped.
-                if (tuid in tid) {
-                    taskid = tid[tuid]
-                    subj_raw = subj[tuid]
-                    st = (taskid in status) ? status[taskid] : "pending"
-                    if (st != "deleted") {
-                        # defang any embedded HANDOFF marker in the subject
-                        gsub(/<!-- HANDOFF:[A-Za-z0-9_-]+:(START|END) -->/, "[handoff-marker]", subj_raw)
-                        if (st == "completed")       printf "- [x] %s\n", subj_raw
-                        else if (st == "in_progress") printf "- [~] %s\n", subj_raw
-                        else                          printf "- [ ] %s\n", subj_raw
-                    }
-                }
-            }
-        }
-    ' || true
-}
-
 # Live context size = the LAST usage-bearing assistant entry's
 # input + cache_read + cache_creation. tail -1 of a transcript is often a
 # type:system line with no usage, so scan BACK (bounded to the last 100 lines —
@@ -240,11 +190,11 @@ build_deterministic_handoff() {
         echo
         echo "## Files Touched (this work unit)"
         harvest_files < "$win" | sed 's/^/- /'
-        echo
-        echo "## Tasks"
-        echo "<!-- HANDOFF:TASKS:START -->"
-        harvest_tasks < "$win"
-        echo "<!-- HANDOFF:TASKS:END -->"
+        # ponytail: no Tasks section — native task state survives /clear within the
+        # same CLI process (~/.claude/tasks/), the only path that injects a handoff.
+        # If a future harness drops that persistence, re-add a harvester reading the
+        # entry-level .toolUseResult fields (shapes recorded in
+        # docs/superpowers/specs/2026-07-03-review-fixes-design.md).
     } > "$OUT"
 
     rm -f "$win"
