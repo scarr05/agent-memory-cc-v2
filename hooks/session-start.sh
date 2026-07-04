@@ -270,8 +270,12 @@ fi
 NOW_EPOCH=$(date +%s)
 LAST_DREAM_FILE="$PROJECT_DIR/.last-dream"
 if [[ -f "$LAST_DREAM_FILE" ]]; then
-    read -r LAST_DREAM < "$LAST_DREAM_FILE" || LAST_DREAM=0
-    LAST_DREAM="${LAST_DREAM:-0}"
+    # `|| true` (not `|| LAST_DREAM=0`): read returns 1 at EOF-without-newline
+    # even though it delivered the value — do not discard it. The numeric guard
+    # is what keeps garbled scratch bytes out of $((...)) (an arithmetic error
+    # there would kill the whole hook under set -e).
+    read -r LAST_DREAM < "$LAST_DREAM_FILE" || true
+    [[ "${LAST_DREAM:-}" =~ ^[0-9]+$ ]] || LAST_DREAM=0
     if [[ $(( (NOW_EPOCH - LAST_DREAM) / 3600 )) -ge 24 ]]; then
         touch "$PROJECT_DIR/.dream-pending"
     fi

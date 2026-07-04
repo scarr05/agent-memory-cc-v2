@@ -344,6 +344,31 @@ assert_contains     "MIN-1: \\n expands to real newline (line1 present)"  "line1
 assert_contains     "MIN-1: literal Windows path not expanded"            'C:\Users\test'  "$MIN1_OUT"
 assert_not_contains "MIN-1: \\t not expanded to tab char"                 $'\t'            "$MIN1_OUT"
 
+# --- B1: a garbled .last-dream must not kill session-start (real entrypoint) ---
+# Uses the hook's own dir-basename slug derivation so the seeded staging dir
+# matches what the hook computes. OBSIDIAN_CLI_PATH=/nonexistent keeps the run
+# fast and vault-free; HOME is throwaway so live staging is never touched.
+B1_HOME="$(mktemp -d)"; B1_PROJ="$(mktemp -d)"
+B1_SLUG="$(basename "$B1_PROJ" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')"
+B1_STAGE="$B1_HOME/.claude/memory-staging/$B1_SLUG"
+mkdir -p "$B1_STAGE"
+printf '%s\n' '!!corrupt!!' > "$B1_STAGE/.last-dream"
+B1_RC=0
+B1_OUT="$(cd "$B1_PROJ" && echo '{"source":"startup"}' \
+    | HOME="$B1_HOME" OBSIDIAN_CLI_PATH=/nonexistent bash "$HERE/../hooks/session-start.sh" 2>/dev/null)" || B1_RC=$?
+assert_eq       "B1: garbled .last-dream exits 0"  "0" "$B1_RC"
+assert_contains "B1: context still emitted"        "Memory System Active" "$B1_OUT"
+
+# Clobber regression: a RECENT epoch written without a trailing newline was read
+# but then discarded by the old `|| LAST_DREAM=0` (read returns 1 at EOF), which
+# wrongly aged the dream timer to 1970 and flagged a consolidation.
+printf '%s' "$(date +%s)" > "$B1_STAGE/.last-dream"
+rm -f "$B1_STAGE/.dream-pending"
+B1_OUT2="$(cd "$B1_PROJ" && echo '{"source":"startup"}' \
+    | HOME="$B1_HOME" OBSIDIAN_CLI_PATH=/nonexistent bash "$HERE/../hooks/session-start.sh" 2>/dev/null)" || true
+assert_not_contains "B1: recent no-newline .last-dream not clobbered" "Dream consolidation pending" "$B1_OUT2"
+rm -rf "$B1_HOME" "$B1_PROJ"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
