@@ -58,8 +58,10 @@ if [[ -n "$HAS_OFFSET" ]] || [[ -n "$HAS_LIMIT" ]]; then
 fi
 
 # --- Cache key ---
-# Use base64 of file path as cache filename to handle special chars
-CACHE_KEY=$(echo -n "$FILE_PATH" | base64 -w 0 2>/dev/null || echo -n "$FILE_PATH" | base64 2>/dev/null | tr -d '\n')
+# sha1 of the path: fixed 40-char filename, safe for non-ASCII and >NAME_MAX
+# paths (raw base64 can emit "/" for bytes >=0x80 and overflow NAME_MAX).
+# sha1sum ships with Git Bash / coreutils.
+CACHE_KEY=$(printf '%s' "$FILE_PATH" | sha1sum 2>/dev/null | cut -d' ' -f1 || true)
 if [[ -z "$CACHE_KEY" ]]; then
     exit 0  # Cannot create cache key — allow read
 fi

@@ -382,6 +382,29 @@ assert_contains     "H1: plaintext fallback emitted" "H1 plaintext line"  "$H1_O
 assert_not_contains "H1: no JSON wrapper without jq" "hookSpecificOutput" "$H1_OUT"
 rm -f "$H1S"
 
+# --- B2: read-once cache key must survive long and non-ASCII paths ---
+RO="$HERE/../hooks/read-once/hook.sh"
+B2_HOME="$(mktemp -d)"
+# ~200-char path: base64 of it exceeds NAME_MAX(255) as a cache FILENAME, so the
+# old key scheme fails the cache write and set -e kills the hook (exit != 0).
+B2_DIR="$(mktemp -d)/$(printf 'd%.0s' {1..60})/$(printf 'e%.0s' {1..60})/$(printf 'f%.0s' {1..60})"
+mkdir -p "$B2_DIR"
+B2_FILE="$B2_DIR/target.txt"; echo content > "$B2_FILE"
+B2_PAYLOAD="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE\"}}"
+B2_RC1=0; printf '%s' "$B2_PAYLOAD" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" >/dev/null 2>&1 || B2_RC1=$?
+B2_RC2=0; B2_OUT2="$(printf '%s' "$B2_PAYLOAD" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" 2>/dev/null)" || B2_RC2=$?
+assert_eq       "B2: long path first read exits 0"     "0"       "$B2_RC1"
+assert_eq       "B2: long path second read exits 0"    "0"       "$B2_RC2"
+assert_contains "B2: long path second read is deduped" "already" "$B2_OUT2"
+
+# Accented path regression (bytes >=0x80 could put "/" in a base64 key).
+B2_FILE2="$(mktemp -d)/café.txt"; echo content > "$B2_FILE2"
+B2_PAYLOAD2="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE2\"}}"
+printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" >/dev/null 2>&1 || true
+B2_OUT4="$(printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" 2>/dev/null)" || true
+assert_contains "B2: accented path second read is deduped" "already" "$B2_OUT4"
+rm -rf "$B2_HOME"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
