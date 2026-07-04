@@ -425,6 +425,18 @@ assert_contains "B3: count nudge survives co-fire"    "This session has 30 excha
 assert_contains "B3: duration nudge present"          "running for 46 minutes"        "$B3_OUT"
 rm -rf "$B3_HOME" "$B3_PROJ"
 
+# --- T1: read_live_tokens regression cases (must pass before AND after the swap) ---
+T1F="$(mktemp)"
+{ printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":100,"cache_read_input_tokens":20,"cache_creation_input_tokens":3},"content":[{"type":"text","text":"x"}]}}'
+  printf '%s\n' '{"type":"system","subtype":"a"}' '{"type":"system","subtype":"b"}' '{"type":"system","subtype":"c"}'
+} > "$T1F"
+assert_eq "T1: usage found behind 3 trailing system lines" "123" "$(read_live_tokens "$T1F")"
+printf '%s\n' 'this line is not JSON at all' >> "$T1F"
+assert_eq "T1: malformed trailing line tolerated"          "123" "$(read_live_tokens "$T1F")"
+printf '' > "$T1F"
+assert_eq "T1: empty transcript => 0"                      "0"   "$(read_live_tokens "$T1F")"
+rm -f "$T1F"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

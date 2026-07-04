@@ -60,23 +60,23 @@ harvest_git() {
     git log --oneline -3 2>/dev/null | sed 's/^/- /' || true
 }
 
-# Live context size = the LAST usage-bearing assistant entry's
-# input + cache_read + cache_creation. tail -1 of a transcript is often a
-# type:system line with no usage, so scan BACK (bounded to the last 100 lines —
-# the last usage entry is always within a few of the tail) and take the first hit.
+# Live context size = the LAST usage-bearing entry's input + cache_read +
+# cache_creation. tail -1 of a transcript is often a type:system line with no
+# usage, so take the last usage-bearing line within the final 100 (the last
+# usage entry is always within a few of the tail). ONE jq spawn per call — this
+# runs on the Stop hot path, where the old per-line loop cost up to 100 spawns
+# (~30-50ms each on Git Bash). fromjson? skips a malformed line instead of
+# failing the whole slurp, preserving the old per-line tolerance.
 read_live_tokens() {
     local t="$1"
     [[ -f "$t" ]] || { echo 0; return 0; }
-    local line u
-    while IFS= read -r line; do
-        u=$(printf '%s' "$line" | jq -r '
-            (.message.usage // empty)
-            | if . == "" then empty
-              else ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
-              end' 2>/dev/null || true)
-        if [[ "$u" =~ ^[0-9]+$ ]] && [[ "$u" -gt 0 ]]; then echo "$u"; return 0; fi
-    done < <(tail -n 100 "$t" | tac)
-    echo 0
+    local u
+    u=$(tail -n 100 "$t" | jq -rRs '
+        [ split("\n")[] | fromjson? | .message.usage | select(.)
+          | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
+          | select(. > 0) ] | last // 0' 2>/dev/null || true)
+    [[ "$u" =~ ^[0-9]+$ ]] || u=0
+    echo "$u"
 }
 
 # Print the lines between <!-- HANDOFF:<NAME>:START --> and its matching :END
