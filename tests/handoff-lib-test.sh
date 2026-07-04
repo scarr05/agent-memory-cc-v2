@@ -405,6 +405,26 @@ B2_OUT4="$(printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test
 assert_contains "B2: accented path second read is deduped" "already" "$B2_OUT4"
 rm -rf "$B2_HOME"
 
+# --- B3: co-firing count + duration nudges must BOTH be shown ---
+SM="$HERE/../hooks/stop-memory.sh"
+B3_HOME="$(mktemp -d)"; B3_PROJ="$(mktemp -d)"
+B3_SLUG="$(basename "$B3_PROJ" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')"
+B3_META="$B3_HOME/.claude/memory-staging/$B3_SLUG/.session-meta"
+mkdir -p "$(dirname "$B3_META")"
+B3_NOW=$(date +%s)
+# message_count=29 => this turn hits 30 (count nudge); start 46min ago (duration nudge)
+cat > "$B3_META" <<EOF3
+session_start=2026-07-03T00:00:00Z
+session_start_epoch=$((B3_NOW - 2760))
+message_count=29
+project_slug=$B3_SLUG
+area=
+EOF3
+B3_OUT="$(cd "$B3_PROJ" && echo '{}' | HOME="$B3_HOME" bash "$SM" 2>/dev/null)" || true
+assert_contains "B3: count nudge survives co-fire"    "This session has 30 exchanges" "$B3_OUT"
+assert_contains "B3: duration nudge present"          "running for 46 minutes"        "$B3_OUT"
+rm -rf "$B3_HOME" "$B3_PROJ"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]
