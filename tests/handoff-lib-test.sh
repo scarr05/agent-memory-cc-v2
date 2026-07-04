@@ -387,7 +387,7 @@ RO="$HERE/../hooks/read-once/hook.sh"
 B2_HOME="$(mktemp -d)"
 # ~200-char path: base64 of it exceeds NAME_MAX(255) as a cache FILENAME, so the
 # old key scheme fails the cache write and set -e kills the hook (exit != 0).
-B2_DIR="$(mktemp -d)/$(printf 'd%.0s' {1..60})/$(printf 'e%.0s' {1..60})/$(printf 'f%.0s' {1..60})"
+B2_DIR="$B2_HOME/$(printf 'd%.0s' {1..60})/$(printf 'e%.0s' {1..60})/$(printf 'f%.0s' {1..60})"
 mkdir -p "$B2_DIR"
 B2_FILE="$B2_DIR/target.txt"; echo content > "$B2_FILE"
 B2_PAYLOAD="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE\"}}"
@@ -398,7 +398,7 @@ assert_eq       "B2: long path second read exits 0"    "0"       "$B2_RC2"
 assert_contains "B2: long path second read is deduped" "already" "$B2_OUT2"
 
 # Accented path regression (bytes >=0x80 could put "/" in a base64 key).
-B2_FILE2="$(mktemp -d)/café.txt"; echo content > "$B2_FILE2"
+B2_FILE2="$B2_HOME/café.txt"; echo content > "$B2_FILE2"
 B2_PAYLOAD2="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE2\"}}"
 printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" >/dev/null 2>&1 || true
 B2_OUT4="$(printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" 2>/dev/null)" || true
@@ -433,6 +433,10 @@ T1F="$(mktemp)"
 assert_eq "T1: usage found behind 3 trailing system lines" "123" "$(read_live_tokens "$T1F")"
 printf '%s\n' 'this line is not JSON at all' >> "$T1F"
 assert_eq "T1: malformed trailing line tolerated"          "123" "$(read_live_tokens "$T1F")"
+# Valid JSON but a non-object scalar: .message on a number errored under the old
+# expression and aborted the whole slurp (=> 0). .message?.usage? must tolerate it.
+printf '%s\n' '42' >> "$T1F"
+assert_eq "T1: non-object JSON line tolerated"             "123" "$(read_live_tokens "$T1F")"
 printf '' > "$T1F"
 assert_eq "T1: empty transcript => 0"                      "0"   "$(read_live_tokens "$T1F")"
 rm -f "$T1F"

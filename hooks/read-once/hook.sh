@@ -61,7 +61,8 @@ fi
 # sha1 of the path: fixed 40-char filename, safe for non-ASCII and >NAME_MAX
 # paths (raw base64 can emit "/" for bytes >=0x80 and overflow NAME_MAX).
 # sha1sum ships with Git Bash / coreutils.
-CACHE_KEY=$(printf '%s' "$FILE_PATH" | sha1sum 2>/dev/null | cut -d' ' -f1 || true)
+CACHE_KEY=$(printf '%s' "$FILE_PATH" | sha1sum 2>/dev/null || true)
+CACHE_KEY="${CACHE_KEY%% *}"  # strip the "  -" filename suffix without a cut spawn (hot path)
 if [[ -z "$CACHE_KEY" ]]; then
     exit 0  # Cannot create cache key — allow read
 fi

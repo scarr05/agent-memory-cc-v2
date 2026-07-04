@@ -65,14 +65,15 @@ harvest_git() {
 # usage, so take the last usage-bearing line within the final 100 (the last
 # usage entry is always within a few of the tail). ONE jq spawn per call — this
 # runs on the Stop hot path, where the old per-line loop cost up to 100 spawns
-# (~30-50ms each on Git Bash). fromjson? skips a malformed line instead of
-# failing the whole slurp, preserving the old per-line tolerance.
+# (~30-50ms each on Git Bash). fromjson? skips an unparseable line and .message?.usage?
+# tolerates a valid-JSON non-object line (bare scalar/array) instead of failing the whole
+# slurp — together preserving the old per-line tolerance.
 read_live_tokens() {
     local t="$1"
     [[ -f "$t" ]] || { echo 0; return 0; }
     local u
     u=$(tail -n 100 "$t" | jq -rRs '
-        [ split("\n")[] | fromjson? | .message.usage | select(.)
+        [ split("\n")[] | fromjson? | .message?.usage? | select(.)
           | ((.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
           | select(. > 0) ] | last // 0' 2>/dev/null || true)
     [[ "$u" =~ ^[0-9]+$ ]] || u=0
@@ -199,7 +200,7 @@ build_deterministic_handoff() {
 
     rm -f "$win"
     # The file is always fully assembled above; the trailing harvest helper's exit
-    # code (grep/jq return non-zero on a legitimately-empty section, e.g. no tasks)
+    # code (grep/sed return non-zero on a legitimately-empty section, e.g. no files touched)
     # must not leak as the function's status. The unguarded /handoff CLI
     # path runs under `set -e`, where a non-zero return would spuriously fail an
     # otherwise-valid build. Assembly succeeded — return success explicitly.

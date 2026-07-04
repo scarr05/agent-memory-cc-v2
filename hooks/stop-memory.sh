@@ -84,6 +84,8 @@ NUDGE=$(awk -v now_iso="$NOW_ISO" -v now_epoch="$NOW_EPOCH" -v tmp="$META_FILE.t
             dmsg = "This session has been running for " dur " minutes with " newcount " exchanges. Consider running /memory-sync before context gets too large."
             # Merge, do not overwrite — a co-firing count nudge must still be shown
             # (same " | " joiner as the handoff-token nudge appends with below).
+            # ponytail: two hand-joined nudge sites across the awk/shell boundary; if a
+            # fourth nudge source appears, promote to one fragment-list accumulator joined once.
             msg = (msg == "") ? dmsg : msg " | " dmsg
         }
         print msg
