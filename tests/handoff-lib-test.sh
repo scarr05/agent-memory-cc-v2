@@ -369,6 +369,19 @@ B1_OUT2="$(cd "$B1_PROJ" && echo '{"source":"startup"}' \
 assert_not_contains "B1: recent no-newline .last-dream not clobbered" "Dream consolidation pending" "$B1_OUT2"
 rm -rf "$B1_HOME" "$B1_PROJ"
 
+# --- H1: emit_context_and_exit falls back to plaintext when jq is missing ---
+H1S="$(mktemp)"
+{
+    echo 'command() { return 1; }   # simulate: no jq on PATH (command -v fails)'
+    sed -n '/^emit_context_and_exit()/,/^}/p' "$HERE/../hooks/session-start.sh"
+    echo 'emit_context_and_exit "H1 plaintext line\\nsecond line"'
+} > "$H1S"
+H1_RC=0; H1_OUT="$(bash "$H1S")" || H1_RC=$?
+assert_eq           "H1: no-jq emitter exits 0"      "0"                  "$H1_RC"
+assert_contains     "H1: plaintext fallback emitted" "H1 plaintext line"  "$H1_OUT"
+assert_not_contains "H1: no JSON wrapper without jq" "hookSpecificOutput" "$H1_OUT"
+rm -f "$H1S"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]]

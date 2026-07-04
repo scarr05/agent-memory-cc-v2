@@ -28,6 +28,9 @@ fi
 emit_context_and_exit() {
     local ctx="$1"
     local out="${ctx//\\n/$'\n'}"          # expand only the \n we control; leave \t \r etc literal
+    # No jq => degrade to the documented plaintext channel rather than dying
+    # having injected nothing (this is the highest-value hook).
+    command -v jq >/dev/null 2>&1 || { printf '%s\n' "$out"; exit 0; }
     if [[ "${MEMORY_HOOK_PLAINTEXT:-0}" == "1" ]]; then
         printf '%s\n' "$out"
     else
