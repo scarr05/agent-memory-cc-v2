@@ -1,0 +1,6 @@
+# Results contain project-specific paths and vault data
+results/*.md
+results/*.log
+# Per-machine timing baseline — regenerated every harness run, never committed
+results/.timing-baseline
+!results/.gitkeep

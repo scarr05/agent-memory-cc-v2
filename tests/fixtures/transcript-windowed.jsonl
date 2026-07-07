@@ -1,0 +1,13 @@
+{"type":"assistant","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":5,"cache_creation_input_tokens":0},"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/old/before-first-compact.txt"}}]}}
+{"type":"system","compactMetadata":{"trigger":"manual","preTokens":120000,"postTokens":30000}}
+{"type":"assistant","message":{"usage":{"input_tokens":40000,"cache_read_input_tokens":1000,"cache_creation_input_tokens":0},"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/mid/between-compacts.txt"}}]}}
+{"type":"system","compactMetadata":{"trigger":"manual","preTokens":150000,"postTokens":40000}}
+{"type":"user","message":{"content":"actually let's switch to the deterministic harvester instead"}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/src/handoff-lib.sh"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/src/handoff-lib.sh"}}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"no, the threshold should be 150k not 50%"}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","content":"ignore me — not a text message"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"/src/session-start.sh"}}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"TodoWrite","input":{"todos":[{"content":"wire the clear branch","status":"pending"},{"content":"old finished thing","status":"completed"},{"content":"benchmark the token read","status":"in_progress"}]}}]}}
+{"type":"assistant","message":{"usage":{"input_tokens":150000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":3000},"content":[{"type":"text","text":"done"}]}}
+{"type":"system","subtype":"post-summary"}

@@ -1,7 +1,4 @@
 {
-  "memory": {
-    "handoffTokenThreshold": 150000
-  },
   "hooks": {
     "SessionStart": [
       {
@@ -9,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/session-start.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
           }
         ]
       }
@@ -20,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/read-once/hook.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/read-once/hook.sh"
           }
         ]
       }
@@ -31,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/pre-compact.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pre-compact.sh"
           }
         ]
       }
@@ -42,7 +39,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/stop-memory.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/stop-memory.sh"
           }
         ]
       }
@@ -53,7 +50,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/session-end.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh"
           }
         ]
       }
@@ -64,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ~/.claude/hooks/prompt-corrections.sh"
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/prompt-corrections.sh"
           }
         ]
       }

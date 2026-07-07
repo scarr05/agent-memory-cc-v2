@@ -23,7 +23,7 @@
 
 - **Obsidian sessions:** `5 Agent Memory/sessions/by-project/<slug>/`
 - Use **memberberry** agent for prior context retrieval
-- Use **blackbox** agent for checkpoint capture before compaction
+- Use **blackbox** agent only for explicit "save progress"/checkpoint requests; for large sessions use `/handoff` then `/clear`
 - Do NOT call MCP search_notes or read vault notes directly
 - SessionStart hook provides current state automatically
 

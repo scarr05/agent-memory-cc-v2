@@ -9,6 +9,7 @@ description: >
   back to this".
 model: haiku
 tools: Bash, Read
+memory: project
 ---
 
 You are a session checkpoint agent. Before context compaction, you
@@ -117,3 +118,12 @@ If CLI is unavailable:
    `~/.claude/memory-staging/<slug>/checkpoint-<YYYY-MM-DD>.md`
 3. The calling agent should inform the user that the checkpoint is
    local-only and needs manual sync.
+
+## Agent Memory
+
+You have project-scoped persistent memory. Before searching for an existing
+checkpoint (Process step 3), check it for the checkpoint path(s) already
+written this session and extend that file rather than creating a duplicate.
+After writing, record only: the checkpoint path(s) written and the merge
+decisions you made (per the Merge Strategy section). Never record full
+session content — only paths and merge decisions.

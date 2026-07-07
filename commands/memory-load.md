@@ -1,15 +1,14 @@
 ---
 description: "Load relevant context from Obsidian vault for the current project. Use at session start or when switching to a different area of work. Lightweight alternative to manually searching memory."
-user-invocable: true
 allowed-tools:
   - "Agent"
   - "Bash"
-  - "obsidian:read_note"
-  - "obsidian:search_notes"
-  - "obsidian:get_frontmatter"
-  - "obsidian:list_directory"
-  - "obsidian:read_multiple_notes"
-  - "obsidian:get_notes_info"
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__get_notes_info"
 ---
 
 # /memory-load
@@ -39,7 +38,6 @@ If the state file exists, use its values:
 - `slug` → project slug for all subsequent searches
 - `area` → Obsidian area
 - `sessionPath` → where to find sessions
-- `pendingCheckpoints` → files to process
 - `dreamPending` → whether to nudge for dream consolidation
 
 If the state file does NOT exist, fall back to detecting the slug:
@@ -48,13 +46,13 @@ If the state file does NOT exist, fall back to detecting the slug:
 3. Use directory name
 Warn the user: "State file missing — using auto-detected slug. Consider running `/memory-init` to set up properly."
 
-#### 0.2 Check Pending Checkpoints
+#### 0.2 Check Pending Handoff
 
 ```bash
-ls ~/.claude/memory-staging/<slug>/checkpoint-*.md 2>/dev/null
+ls ~/.claude/memory-staging/<slug>/handoff.md 2>/dev/null
 ```
 
-If any exist, list them and remind to process to Obsidian `5 Agent Memory/working/`.
+If it exists, note it and read its content. SessionStart(`source=clear`) normally injects the handoff automatically and renames it `handoff.consumed.md` — `/memory-load` is the manual restore path if that injection was missed. Present the handoff content as part of the context block below.
 
 #### 0.3 Check Dream Status
 
@@ -69,7 +67,7 @@ Output a summary matching the SessionStart format:
 Project slug: `<slug>`
 Area: `<area>`
 Obsidian session path: `<sessionPath>`
-[pending checkpoints if any]
+[pending handoff if any]
 [dream status if pending]
 ```
 
