@@ -229,6 +229,22 @@ assert_eq "compact-fallback CLI exits 0 with no summary" "0" "$RC_CF"
 assert_not_contains "compact-fallback drops the decisions section" "## Tagged Decisions / Corrections" "$(cat "$OUT5")"
 assert_eq "compact-fallback: Files Touched is the final section" "## Files Touched (this work unit)" "$(awk '/<!-- HANDOFF:NARRATIVE:END -->/{f=1;next} f' "$OUT5" | grep '^## ' | tail -1)"
 
+# Regression (RC=5 fail-closed): a malformed JSON line in the window must NOT abort the
+# build. harvest_files' jq once exited non-zero on a bad line (2>/dev/null hid the message,
+# not the exit code); under the /handoff CLI's `set -euo pipefail` that pipefail-propagated
+# out of the `{ } > $OUT` group BEFORE `return 0`, so build partial-output + exited RC=5.
+# Exercise the REAL CLI entrypoint: valid Edit / malformed line / usage line.
+MAL="$TMPD/malformed.jsonl"; OUT7="$TMPD/malformed-handoff.md"
+{ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Edit","input":{"file_path":"/foo/bar.sh"}}]}}'
+  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"tool_use", MALFORMED NOT JSON'
+  printf '%s\n' '{"type":"assistant","message":{"usage":{"input_tokens":123}}}'
+} > "$MAL"
+RC_MAL=0; bash "$LIBSH" build --transcript "$MAL" --slug "demo-proj" --source handoff --out "$OUT7" </dev/null || RC_MAL=$?
+assert_eq "build CLI exits 0 on a malformed transcript line" "0" "$RC_MAL"
+# File is complete: Files Touched is still the final section (the Files-Touched list may
+# legitimately be empty, but the section and everything after the narrative must be present).
+assert_eq "malformed build: Files Touched is the final section" "## Files Touched (this work unit)" "$(awk '/<!-- HANDOFF:NARRATIVE:END -->/{f=1;next} f' "$OUT7" | grep '^## ' | tail -1)"
+
 # Security regression (marker injection): a compaction summary that embeds the block
 # markers must not forge the narrative boundaries. harvest_compact_summary defangs any
 # HANDOFF marker to [handoff-marker], so the file keeps exactly one real START/END and

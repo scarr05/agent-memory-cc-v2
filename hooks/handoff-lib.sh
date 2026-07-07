@@ -37,8 +37,18 @@ window_transcript() {
 
 # Frequency table of files edited this work unit. Reads windowed JSONL on stdin.
 # Covers Edit/Write/MultiEdit (file_path) and NotebookEdit (notebook_path).
+# -Rs + fromjson? makes jq itself abort-safe: a malformed line is skipped and jq still
+# exits 0, so the `{ } > $OUT` group in build_deterministic_handoff completes and reaches
+# its `return 0`. A bare `jq` exits non-zero on a bad line (2>/dev/null hides the message,
+# not the exit code), which under the /handoff CLI's `set -e`+`pipefail` fails the build
+# closed (RC=5, partial output). Tighter than a call-site `|| true`, which would also mask
+# a genuine sed failure and leave the line-199 abort-safety claim untrue.
+# ponytail: assumes strict JSONL — one JSON value per physical line (true of every
+# transcript this system consumes). A producer emitting two values on one line would drop
+# that line; if that ever happens, switch to `jq -rn 'inputs? ...'` stream tolerance.
 harvest_files() {
-    jq -r 'select(.type=="assistant") | .message.content[]?
+    jq -rRs 'split("\n")[] | fromjson?
+           | select(.type=="assistant") | .message.content[]?
            | select(.type=="tool_use")
            | select(.name=="Edit" or .name=="Write" or .name=="MultiEdit" or .name=="NotebookEdit")
            | (.input.file_path // .input.notebook_path // empty)' 2>/dev/null \
