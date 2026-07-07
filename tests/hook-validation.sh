@@ -494,9 +494,10 @@ else
     # --- Token-nudge cases ---
     # The fixture transcript-windowed.jsonl has a last usage entry summing to
     # 155000 tokens (input:150000 + cache_read:2000 + cache_creation:3000), which
-    # exceeds the 150000 default threshold. The path MUST be absolute because the
-    # hook runs with an arbitrary CWD.
-    TOKEN_FIXTURE="$PWD/tests/fixtures/transcript-windowed.jsonl"
+    # exceeds the 150000 default threshold. Anchor to $SCRIPT_DIR (the repo's tests/
+    # dir), NOT $PWD: the harness cd'd into the project-under-test, so a $PWD-relative
+    # path would resolve inside that arbitrary project and the fixture would be missing.
+    TOKEN_FIXTURE="$SCRIPT_DIR/fixtures/transcript-windowed.jsonl"
     TOKEN_STDIN="{\"transcript_path\":\"$TOKEN_FIXTURE\"}"
 
     # Case A: Token-nudge fires at threshold.
@@ -625,7 +626,7 @@ else
     SE_HANDOFF_CONSUMED="$SE_STAGING/handoff.consumed.md"
     rm -f "$SE_HANDOFF" "$SE_HANDOFF_CONSUMED"
     se_seed_meta 12
-    echo "{\"reason\":\"clear\",\"transcript_path\":\"$PWD/tests/fixtures/transcript-windowed.jsonl\"}" \
+    echo "{\"reason\":\"clear\",\"transcript_path\":\"$SCRIPT_DIR/fixtures/transcript-windowed.jsonl\"}" \
         | bash "$SE_HOOK" 2>/dev/null || true
     if [[ -f "$SE_HANDOFF" ]] && grep -q 'clear-fallback' "$SE_HANDOFF"; then
         pass "reason=clear with transcript arms clear-fallback handoff"
@@ -636,7 +637,7 @@ else
     # Case 6: reason=clear + transcript, existing manual handoff -> NOT clobbered.
     printf -- '---\nsource: handoff\n---\nMANUAL_HANDOFF_TOKEN\n' > "$SE_HANDOFF"
     se_seed_meta 12
-    echo "{\"reason\":\"clear\",\"transcript_path\":\"$PWD/tests/fixtures/transcript-windowed.jsonl\"}" \
+    echo "{\"reason\":\"clear\",\"transcript_path\":\"$SCRIPT_DIR/fixtures/transcript-windowed.jsonl\"}" \
         | bash "$SE_HOOK" 2>/dev/null || true
     if grep -q 'MANUAL_HANDOFF_TOKEN' "$SE_HANDOFF" 2>/dev/null; then
         pass "reason=clear does not clobber an existing manual handoff"
