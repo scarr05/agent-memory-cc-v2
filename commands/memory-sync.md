@@ -306,7 +306,7 @@ Skip steps that need user interaction. Concretely:
 
 1. Write the session note to `5 Agent Memory/sessions/by-project/<slug>/` as normal (frontmatter, summary, decisions, next steps).
 2. Scan the session for corrections or explicit decisions. If NONE: mark `.session-meta` `synced=true`, clean staging, and finish — no learnings proposal, no questions.
-3. If corrections/decisions exist: list them in one message for approval (rule 3 in global CLAUDE.md still applies — never write to `learnings/` unapproved), then finish.
+3. If corrections/decisions exist: auto-append decisions to `_decisions.md` as in the standard flow (Step 3.6 — no approval needed), and list any correction-derived learnings in one message for approval (rule 3 in global CLAUDE.md — never write to `learnings/` unapproved), then finish.
 
 Quick mode never runs --ingest or --tidy.
 

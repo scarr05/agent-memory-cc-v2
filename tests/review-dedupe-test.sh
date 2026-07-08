@@ -60,6 +60,13 @@ OUT=$(payload "/security-review" | bash "$HOOK"); RC=$?
 check "non-repo silent" EMPTY "$OUT"
 check "non-repo exit 0" "0" "$RC"
 
+# 7. Repo with no commits (unborn HEAD): silent, exit 0
+cd "$(mktemp -d)"
+git init -q
+OUT=$(payload "/security-review" | bash "$HOOK"); RC=$?
+check "unborn-HEAD silent" EMPTY "$OUT"
+check "unborn-HEAD exit 0" "0" "$RC"
+
 echo "----"
 echo "PASS=$PASS FAIL=$FAIL"
 [[ $FAIL -eq 0 ]]

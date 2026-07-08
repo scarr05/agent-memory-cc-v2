@@ -15,6 +15,7 @@ case "$PROMPT" in
 esac
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+git rev-parse HEAD >/dev/null 2>&1 || exit 0   # unborn HEAD (no commits): nothing to dedupe
 
 # Hash = HEAD commit + working+staged diff. Clean tree at the same commit
 # hashes identically — that IS the duplicate-branch-review case we want caught.
