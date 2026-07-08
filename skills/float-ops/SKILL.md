@@ -16,7 +16,7 @@ All in `~/Documents/Projects/agent-memory-cc-v2-files/scripts/aws/`:
 | Script | Purpose |
 |--------|---------|
 | `cw-dash.sh [hours]` | The standard float metric set, one table (defaults to the workload account profile) |
-| `ssm-ids.sh [--refresh]` | Instance id/name/state, cached 1h |
+| `ssm-ids.sh [--refresh]` | Instance id/name/state, cached 1h (defaults to the workload account profile) |
 | `deploy-watch.sh [run-id]` | Watch GH Actions run; exit 0 ONLY on verified `completed success` — never trust `gh run watch`'s exit code |
 
 Scripts fail fast with the login command when the SSO token is stale — relay it to the user, don't work around it.
