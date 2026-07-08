@@ -1,0 +1,12 @@
+{
+  "region": "eu-west-2",
+  "period": 1800,
+  "metrics": [
+    {"id": "m1", "namespace": "Nextcloud", "name": "RestoreJobStatus", "dimensions": [{"Name": "InstanceId", "Value": "i-016adb25941178579"}], "stat": "Maximum"},
+    {"id": "m2", "namespace": "Nextcloud", "name": "AppHealth", "dimensions": [{"Name": "InstanceId", "Value": "i-016adb25941178579"}], "stat": "Maximum"},
+    {"id": "m3", "namespace": "Nextcloud", "name": "DbHealth", "dimensions": [{"Name": "InstanceId", "Value": "i-016adb25941178579"}], "stat": "Maximum"},
+    {"id": "m4", "namespace": "Nextcloud", "name": "CacheHealth", "dimensions": [{"Name": "InstanceId", "Value": "i-016adb25941178579"}], "stat": "Maximum"},
+    {"id": "m5", "namespace": "Nextcloud", "name": "MaintenanceMode", "dimensions": [{"Name": "InstanceId", "Value": "i-016adb25941178579"}], "stat": "Maximum"},
+    {"id": "m6", "namespace": "Nextcloud", "name": "BackupJobStatus", "dimensions": [{"Name": "InstanceId", "Value": "i-016adb25941178579"}], "stat": "Maximum"}
+  ]
+}
