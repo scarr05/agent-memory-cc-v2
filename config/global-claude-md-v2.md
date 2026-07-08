@@ -60,6 +60,17 @@ Roughly every 24 hours the Stop hook surfaces a 💤 dream-pending nudge. When y
 - Python for scripts, Node.js for services
 - draw.io for architecture diagrams (I have a skill for this)
 
+## Windows
+
+This machine is Windows 11; Bash tool = Git Bash (MSYS), PowerShell also available. Known traps — apply pre-emptively, don't rediscover:
+
+- MSYS mangles leading-slash args (`/c/...` rewrites). Prefix `MSYS_NO_PATHCONV=1` or use relative/Windows paths.
+- CRLF: `sed` won't strip `\r` — use `tr -d '\r'`. Shell scripts must stay LF (`.gitattributes` pins `eol=lf`).
+- `/tmp` in Git Bash is not the Windows temp dir and PowerShell can't see it — use the session scratchpad dir.
+- Python defaults to cp1252: always pass `encoding="utf-8"` on `open()`, and set `PYTHONIOENCODING=utf-8` when piping.
+- Stderr silencing: `2>$null` in PowerShell, `2>/dev/null` in bash — never mix.
+- `git mv`/deletes fail with "file in use" when node/esbuild watchers hold locks — kill dev servers first.
+
 ## Tools Available
 
 ### Obsidian CLI (reads — used by subagents)
