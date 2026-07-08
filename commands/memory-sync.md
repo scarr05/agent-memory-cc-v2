@@ -25,6 +25,7 @@ Consolidate this session's context into the Obsidian vault. $ARGUMENTS
 
 Parse $ARGUMENTS for mode flags:
 - **(no args)** — Standard session sync (default)
+- **--quick** — Fast path: write the session note from the current conversation without the interactive learnings-proposal pass. Only propose learnings if the session contains an explicit correction or decision; otherwise write the note and stop. Use for routine sessions where full ceremony isn't worth the tokens.
 - **--dream** — Deep consolidation: mine transcripts, cross-reference vault, prune stale sessions (includes --ingest and --tidy)
 - **--ingest** — Pull auto-memory from this project into vault (alias for dream Phase 3)
 - **--tidy** — Review old sessions for staleness and archive candidates (alias for dream Phase 4)
@@ -296,6 +297,18 @@ Show current memory state without writing anything:
 3. Any working/ files still active
 4. Auto-memory file count for current project
 5. Last sync date (from most recent session note)
+
+---
+
+## Quick Mode (--quick)
+
+Skip steps that need user interaction. Concretely:
+
+1. Write the session note to `5 Agent Memory/sessions/by-project/<slug>/` as normal (frontmatter, summary, decisions, next steps).
+2. Scan the session for corrections or explicit decisions. If NONE: mark `.session-meta` `synced=true`, clean staging, and finish — no learnings proposal, no questions.
+3. If corrections/decisions exist: list them in one message for approval (rule 3 in global CLAUDE.md still applies — never write to `learnings/` unapproved), then finish.
+
+Quick mode never runs --ingest or --tidy.
 
 ---
 
