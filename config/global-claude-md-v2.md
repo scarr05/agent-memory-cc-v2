@@ -133,3 +133,4 @@ Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, 
 4. Use `working/` freely, but clean up when done
 5. If MCP-Obsidian isn't responding, tell me — don't silently skip memory operations
 6. Process staging files before they pile up — the hooks create them, you clean them up
+7. Security/code-review findings are returned as `{"findings": [...]}` — a FLAT array of finding objects. Never nest a `findings` key inside `findings`.
