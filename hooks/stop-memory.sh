@@ -135,7 +135,15 @@ if [[ "$MSG_NOW" -ge 8 ]] && ! grep -q '^handoff_nudge_sent=true' "$META_FILE" 2
             # Upsert the once-per-session flag (replace if present, else append) so it
             # can never accumulate duplicate lines across runs.
             if grep -q '^handoff_nudge_sent=' "$META_FILE" 2>/dev/null; then
-                sed -i 's/^handoff_nudge_sent=.*/handoff_nudge_sent=true/' "$META_FILE" 2>/dev/null || true
+                # sed -i is not portable: BSD/macOS sed reads the next argument as
+                # the backup suffix, so the GNU form fails and (being || true'd)
+                # silently leaves the flag unset — re-firing the nudge every Stop.
+                # Write to a temp and mv instead; works on both userlands.
+                if sed 's/^handoff_nudge_sent=.*/handoff_nudge_sent=true/' "$META_FILE" > "$META_FILE.tmp.$$" 2>/dev/null; then
+                    mv "$META_FILE.tmp.$$" "$META_FILE" 2>/dev/null || rm -f "$META_FILE.tmp.$$" 2>/dev/null || true
+                else
+                    rm -f "$META_FILE.tmp.$$" 2>/dev/null || true
+                fi
             else
                 echo "handoff_nudge_sent=true" >> "$META_FILE" 2>/dev/null || true
             fi

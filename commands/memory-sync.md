@@ -209,13 +209,18 @@ Check `~/.claude/memory-staging/<slug>/` for:
 ```bash
 rm -f ~/.claude/memory-staging/<slug>/handoff.md ~/.claude/memory-staging/<slug>/handoff.consumed.md
 META=~/.claude/memory-staging/<slug>/.session-meta
-sed -i 's/message_count=[0-9]*/message_count=0/' "$META" || true
+
+# `sed -i EXPR FILE` is GNU-only — BSD/macOS sed reads EXPR as the backup suffix
+# and errors. Write to a temp and mv; works on both userlands.
+sed_i() { sed "$1" "$2" > "$2.tmp.$$" && mv "$2.tmp.$$" "$2" || rm -f "$2.tmp.$$"; }
+
+sed_i 's/message_count=[0-9]*/message_count=0/' "$META" || true
 
 # Mark synced (SessionEnd reads this) and clear any stale unsynced marker. Upsert
 # the flag (replace if present, else append) so repeat syncs never pile up
 # duplicate synced= lines.
 if grep -q '^synced=' "$META" 2>/dev/null; then
-    sed -i 's/^synced=.*/synced=true/' "$META"
+    sed_i 's/^synced=.*/synced=true/' "$META"
 else
     echo "synced=true" >> "$META"
 fi

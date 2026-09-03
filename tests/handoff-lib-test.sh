@@ -7,6 +7,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../hooks/handoff-lib.sh"
 FIX="$HERE/fixtures/transcript-windowed.jsonl"
 
+# In-place sed that works on both GNU and BSD/macOS userlands: `sed -i EXPR FILE`
+# is GNU-only — BSD sed reads EXPR as the backup suffix and errors.
+sed_i() { # $1=expr $2=file
+    local expr="$1" file="$2"
+    sed "$expr" "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
+}
+
 PASS=0; FAIL=0
 assert_eq() { # $1=label $2=expected $3=actual
     if [[ "$2" == "$3" ]]; then PASS=$((PASS+1)); else
@@ -120,7 +127,7 @@ assert_eq "finalize aborted => file removed" "no" "$([[ -f "$OUT" ]] && echo yes
 # created value is double-quoted (finalize must strip quotes before re-stamping).
 build_deterministic_handoff --transcript "$FIX" --slug "demo-proj" --source handoff --out "$OUT"
 # simulate Claude filling the narrative (replaces the sentinel line; markers remain)
-sed -i 's/<!-- HANDOFF:NARRATIVE -->/We are mid-way through wiring the clear branch; next edit session-start.sh:165./' "$OUT"
+sed_i 's/<!-- HANDOFF:NARRATIVE -->/We are mid-way through wiring the clear branch; next edit session-start.sh:165./' "$OUT"
 assert_contains "extract_block: filled => prose" "mid-way through wiring" "$(extract_block NARRATIVE "$OUT")"
 printf -- '---\ncreated: "2026-06-14T09:00:00Z"\n---\n' > "$TMPD/consumed.md"
 FIN_OK="$(finalize_handoff --out "$OUT" --consumed "$TMPD/consumed.md"; echo "rc=$?")"
@@ -131,7 +138,7 @@ assert_contains "finalize stamps supersedes"   'supersedes: "2026-06-14T09:00:00
 # sentinel comment) must still arm — the thin-guard matches the exact collapsed
 # comment only. (| delimiter avoids the / in the replacement.)
 build_deterministic_handoff --transcript "$FIX" --slug "demo-proj" --source handoff --out "$OUT"
-sed -i 's|<!-- HANDOFF:NARRATIVE -->|Next, replace the HANDOFF:NARRATIVE token in session-start.sh; this narrative is long enough to pass.|' "$OUT"
+sed_i 's|<!-- HANDOFF:NARRATIVE -->|Next, replace the HANDOFF:NARRATIVE token in session-start.sh; this narrative is long enough to pass.|' "$OUT"
 FIN_MENTION="$(finalize_handoff --out "$OUT" --consumed "$TMPD/none.md"; echo "rc=$?")"
 assert_contains "finalize arms narrative mentioning the token" "ARMED" "$FIN_MENTION"
 

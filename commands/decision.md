@@ -22,7 +22,7 @@ Log a decision to this project's decisions log. $ARGUMENTS
 Read the project slug from `.claude/CLAUDE.md` metadata:
 
 ```bash
-grep -oP '(?<=memory:project-slug=)[^\s-]+[a-z0-9-]*' .claude/CLAUDE.md 2>/dev/null || echo ""
+sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' .claude/CLAUDE.md 2>/dev/null | head -1
 ```
 
 If no slug found, check git remote:

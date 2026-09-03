@@ -31,10 +31,10 @@ if [[ -z "$SLUG" ]]; then
     SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
 fi
 # Defence in depth: the state-file/CLAUDE.md branches aren't charset-filtered.
-# Clamp so a crafted slug can't traverse out of the staging dir. Pure-bash
-# builtins (bash 4+) keep this side-effect hook subprocess-free past the jq read.
-SLUG="${SLUG,,}"
-SLUG="${SLUG//[^a-z0-9-]/}"
+# Clamp so a crafted slug can't traverse out of the staging dir. One tr|sed spawn
+# rather than bash-4 ${var,,}: macOS ships bash 3.2, where the builtin form is a
+# runtime "bad substitution" that kills this hook before the clear branch below.
+SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
 [[ -z "$SLUG" ]] && SLUG="unknown"
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
