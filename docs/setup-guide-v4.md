@@ -170,9 +170,17 @@ Confirm with `claude mcp list` — `obsidian` should report **✔ Connected**. T
 
 Because the server lives inside Obsidian, **the app must be running** for any write to succeed.
 
-### MCP-Obsidian (alternative)
+### MCPVault (alternative — works with Obsidian closed)
 
-[smithery-ai/mcp-obsidian](https://github.com/smithery-ai/mcp-obsidian) also works, but names its tools `read_note` / `write_note` / `patch_note` / `search_notes` / `list_directory`. Runs as a separate `npx` process straight against the vault files, so it works with Obsidian closed, but its patch is a literal string replace and its search has no metadata filtering.
+[bitbonsai/mcpvault](https://github.com/bitbonsai/mcpvault) (formerly `@mauricio.wolff/mcp-obsidian`, renamed at 0.9.0) also works. Install it globally and register the binary; do **not** run it as `npx ...@latest`, which hits the npm registry on every Claude Code start and times out (30s) whenever the registry is slow, leaving the session with no vault writes:
+
+```bash
+npm i -g @bitbonsai/mcpvault
+claude mcp add obsidian --scope user -- mcpvault /path/to/vault                                    # macOS/Linux
+MSYS_NO_PATHCONV=1 claude mcp add obsidian --scope user -- cmd /c mcpvault "C:\path	oault"   # Windows Git Bash
+```
+
+Upgrade with `npm i -g @bitbonsai/mcpvault@latest` and restart Claude Code. Runs as a separate `npx` process straight against the vault files, so it works with Obsidian closed, but its patch is a literal string replace and its search has no metadata filtering.
 
 ---
 
