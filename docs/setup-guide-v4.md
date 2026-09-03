@@ -177,7 +177,7 @@ Because the server lives inside Obsidian, **the app must be running** for any wr
 ```bash
 npm i -g @bitbonsai/mcpvault
 claude mcp add obsidian --scope user -- mcpvault /path/to/vault                                    # macOS/Linux
-MSYS_NO_PATHCONV=1 claude mcp add obsidian --scope user -- cmd /c mcpvault "C:\path	oault"   # Windows Git Bash
+MSYS_NO_PATHCONV=1 claude mcp add obsidian --scope user -- cmd /c mcpvault "C:path	oault"   # Windows Git Bash
 ```
 
 Upgrade with `npm i -g @bitbonsai/mcpvault@latest` and restart Claude Code. Runs as a separate `npx` process straight against the vault files, so it works with Obsidian closed, but its patch is a literal string replace and its search has no metadata filtering.
