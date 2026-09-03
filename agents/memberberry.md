@@ -8,7 +8,7 @@ description: >
   flags corrections or deep history, or for any query about "what
   did we decide", "what was the approach", "continue where we left
   off". Always prefer this agent over directly reading vault notes
-  or calling MCP search_notes.
+  or calling the Obsidian MCP search tools.
 model: haiku
 tools: Bash
 memory: user
@@ -103,7 +103,7 @@ read corrections if they exist, even if you have already read 2 notes.
 
 If the CLI binary is not found (command not found error), immediately
 report to the calling agent: "Obsidian CLI not available. Use MCP
-search_notes directly." Do not attempt further CLI commands.
+the Obsidian MCP search tools directly." Do not attempt further CLI commands.
 
 If a specific CLI command fails but the binary exists, report the
 exact error and the step that failed. Continue with remaining steps

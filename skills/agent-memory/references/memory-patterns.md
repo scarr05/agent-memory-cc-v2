@@ -411,32 +411,32 @@ tags: [memory, index]
 ### Find prior work on a project (slug-based)
 
 ```
-search_notes(query="<project-slug>", searchContent=true)
+search_simple(query="<project-slug>")
 ```
 
 ### Find sessions in a specific project folder
 
 ```
-list_directory("5 Agent Memory/sessions/by-project/<slug>/")
+vault_list(path="5 Agent Memory/sessions/by-project/<slug>/")
 ```
 
 ### Find resumable sessions
 
 ```
-search_notes(query="resumable: true", searchFrontmatter=true)
+search_query(query={"==": [{"var": "frontmatter.resumable"}, true]})
 ```
 
 ### Find learnings by category
 
 ```
-list_directory("5 Agent Memory/learnings/preferences/")
-list_directory("5 Agent Memory/learnings/technical/")
+vault_list(path="5 Agent Memory/learnings/preferences/")
+vault_list(path="5 Agent Memory/learnings/technical/")
 ```
 
 ### Find sessions from a specific agent
 
 ```
-search_notes(query="source_agent: claude.ai", searchFrontmatter=true)
+search_query(query={"==": [{"var": "frontmatter.source_agent"}, "claude.ai"]})
 ```
 
 ---

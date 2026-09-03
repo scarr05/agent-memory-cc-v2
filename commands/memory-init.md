@@ -1,14 +1,11 @@
 ---
 description: "Initialise a project for the memory system. Detects project from repo/folder, creates CLAUDE.md with memory metadata, sets up Obsidian folder structure, loads prior context. Run this once per project or re-run to refresh. The /init on steroids."
 allowed-tools:
-  - "mcp__obsidian__read_note"
-  - "mcp__obsidian__write_note"
-  - "mcp__obsidian__search_notes"
-  - "mcp__obsidian__get_frontmatter"
-  - "mcp__obsidian__list_directory"
-  - "mcp__obsidian__update_frontmatter"
-  - "mcp__obsidian__patch_note"
-  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__vault_read"
+  - "mcp__obsidian__vault_write"
+  - "mcp__obsidian__search_simple"
+  - "mcp__obsidian__vault_list"
+  - "mcp__obsidian__vault_patch"
   - "Bash"
   - "Read"
   - "Write"
@@ -96,7 +93,7 @@ Based on detected stack and repo content, infer the Obsidian area:
 ### 1.8 Check Obsidian for Prior History
 
 ```
-search_notes(query="<detected-slug>", searchContent=true)
+search_simple(query="<detected-slug>")
 ```
 
 Search `5 Agent Memory/sessions/` and `5 Agent Memory/learnings/` for any prior work on this project.
@@ -192,7 +189,7 @@ This project uses the persistent memory system.
 - **Related vault notes:** `<vault-path>`
 - Use **memberberry** agent for prior context retrieval
 - Use **blackbox** agent only for explicit "save progress"/checkpoint requests; for large sessions use `/handoff` then `/clear`
-- Do NOT call MCP search_notes or read vault notes directly
+- Do NOT call MCP search tools or read vault notes directly
 
 On session start, search for prior context before starting non-trivial work.
 On session end, run `/memory-sync` if significant decisions or progress were made.
@@ -228,17 +225,17 @@ Via MCP-Obsidian:
 ### 4.1 Session Folder
 
 ```
-list_directory("5 Agent Memory/sessions/by-project/")
+vault_list(path="5 Agent Memory/sessions/by-project/")
 ```
 
 If `<slug>/` doesn't exist:
 ```
-write_note("5 Agent Memory/sessions/by-project/<slug>/.gitkeep", "")
+vault_write(path="5 Agent Memory/sessions/by-project/<slug>/.gitkeep", content="")
 ```
 
 Or create an index note:
 ```
-write_note("5 Agent Memory/sessions/by-project/<slug>/_index.md", <content>)
+vault_write(path="5 Agent Memory/sessions/by-project/<slug>/_index.md", content=<content>)
 ```
 
 With content:
@@ -276,7 +273,7 @@ If `project-index.md` doesn't exist → create it using the template from the ar
 ### 4.5.1 Check for Existing Decisions Log
 
 ```
-list_directory("5 Agent Memory/sessions/by-project/<slug>/")
+vault_list(path="5 Agent Memory/sessions/by-project/<slug>/")
 ```
 
 If `_decisions.md` already exists, skip this phase (idempotent).
@@ -286,7 +283,8 @@ If `_decisions.md` already exists, skip this phase (idempotent).
 If `_decisions.md` doesn't exist, scan existing session notes for `decisions:` frontmatter:
 
 ```
-get_notes_info("5 Agent Memory/sessions/by-project/<slug>/")
+vault_read(path="<each session note returned by the vault_list above>")
+# vault_read returns frontmatter + stat per note; read the `decisions:` field from each
 ```
 
 For each session note that has a `decisions:` frontmatter array, collect the decisions.
@@ -322,7 +320,7 @@ Found <N> decisions across <M> sessions. Proposed _decisions.md:
 3. After confirmation, write via MCP:
 
 ```
-write_note("5 Agent Memory/sessions/by-project/<slug>/_decisions.md", <content>)
+vault_write(path="5 Agent Memory/sessions/by-project/<slug>/_decisions.md", content=<content>)
 ```
 
 If no existing sessions have decisions, create an empty `_decisions.md` with frontmatter only — ready for the first `/memory-sync` or `/decision` to populate.

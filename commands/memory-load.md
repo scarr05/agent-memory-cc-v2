@@ -3,12 +3,9 @@ description: "Load relevant context from Obsidian vault for the current project.
 allowed-tools:
   - "Agent"
   - "Bash"
-  - "mcp__obsidian__read_note"
-  - "mcp__obsidian__search_notes"
-  - "mcp__obsidian__get_frontmatter"
-  - "mcp__obsidian__list_directory"
-  - "mcp__obsidian__read_multiple_notes"
-  - "mcp__obsidian__get_notes_info"
+  - "mcp__obsidian__vault_read"
+  - "mcp__obsidian__search_simple"
+  - "mcp__obsidian__vault_list"
 ---
 
 # /memory-load
@@ -96,16 +93,16 @@ If memberberry is unavailable or errors, fall back to the MCP steps below.
 ### 2. Fallback: MCP Search (only if memberberry fails)
 
 ```
-search_notes(query="<slug>", searchContent=true)
+search_simple(query="<slug>")
 ```
 
 Search `5 Agent Memory/sessions/by-project/<slug>/` for recent sessions.
-Use `get_frontmatter` to scan dates and status before reading full content.
+Use `vault_read` with `targetType="frontmatter"` to scan dates and status before reading full content.
 
 ### 3. Fallback: Load Learnings
 
 ```
-search_notes(query="<slug OR technology>", searchContent=true)
+search_simple(query="<slug or technology>")
 ```
 
 Search `5 Agent Memory/learnings/` for project-related learnings.
@@ -113,7 +110,7 @@ Search `5 Agent Memory/learnings/` for project-related learnings.
 ### 4. Fallback: Check Working Files
 
 ```
-list_directory("5 Agent Memory/working/")
+vault_list(path="5 Agent Memory/working/")
 ```
 
 Read any active working files for this project.

@@ -20,7 +20,7 @@ The SessionStart hook fires before your first response and injects:
 The hook gives you the slug and dynamic state. For prior context:
 
 1. Delegate to the **memberberry** subagent — it searches the vault using the Obsidian CLI and returns a filtered summary.
-2. Do NOT call MCP `search_notes` or read vault notes directly — memberberry handles this more efficiently via Haiku.
+2. Do NOT call MCP `search_simple` or read vault notes directly — memberberry handles this more efficiently via Haiku.
 3. Briefly state what memberberry found and how it applies.
 4. Do NOT read `5 Agent Memory/_context.md` unless you specifically need my current priorities.
 
@@ -68,10 +68,10 @@ Requires Obsidian 1.12+ with CLI enabled. Used by memberberry and blackbox subag
 
 Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, `links`, `tasks`, `create`, `append`
 
-### MCP-Obsidian (writes — and fallback reads)
+### Obsidian MCP (writes — and fallback reads)
 
-- **Writes:** write_note, patch_note, update_frontmatter, move_note, manage_tags
-- **Reads (fallback if subagents unavailable):** read_note, search_notes, get_frontmatter, list_directory, read_multiple_notes, get_notes_info
+- **Writes:** vault_write, vault_append, vault_patch (targetType heading|block|frontmatter), vault_move, vault_copy, vault_delete
+- **Reads (fallback if subagents unavailable):** vault_read (add targetType="frontmatter" for metadata only), vault_list, vault_get_document_map, search_simple (content), search_query (JsonLogic over frontmatter/tags/path/stat)
 
 ### Subagents
 
@@ -120,5 +120,5 @@ Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, 
 2. When writing code that uses libraries, ALWAYS use Context7 first
 3. Never write to `learnings/` without my approval — propose first
 4. Use `working/` freely, but clean up when done
-5. If MCP-Obsidian isn't responding, tell me — don't silently skip memory operations
+5. If the Obsidian MCP server isn't responding, tell me — don't silently skip memory operations. It runs inside Obsidian, so it needs the app open.
 6. Process staging files before they pile up — the hooks create them, you clean them up

@@ -1,6 +1,6 @@
 ---
 name: agent-memory
-description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing a staging handoff, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires MCP-Obsidian server."
+description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing a staging handoff, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires an Obsidian MCP server (the Local REST API plugin's built-in one, or MCP-Obsidian)."
 ---
 
 # Agent Memory v4
@@ -116,7 +116,7 @@ Hooks write to `~/.claude/memory-staging/<slug>/` because they can't call MCP. Y
    "Use memberberry to find prior context for <slug>"
 3. memberberry searches via CLI: search → search:context → property:read → selective read
 4. Main agent receives filtered summary (~200 tokens)
-5. If memberberry unavailable, fall back to MCP search_notes
+5. If memberberry unavailable, fall back to MCP `search_simple`
 ```
 
 **Or:** the user runs `/memory-load` which does this automatically.
@@ -238,7 +238,7 @@ No approval needed.
 
 **How:**
 ```
-1. read_note("5 Agent Memory/project-index.md")
+1. vault_read(path="5 Agent Memory/project-index.md")
 2. Find project row by slug
 3. Update: last session date, key decisions, status
 4. If project not listed, add a new row
@@ -252,7 +252,7 @@ When the user says "continue where we left off" or "resume X":
 
 ```
 1. Get project slug from hook context or .claude/CLAUDE.md
-2. search_notes("X") in sessions/by-project/<slug>/
+2. search_simple(query="X") — filter results to sessions/by-project/<slug>/
 3. Find most recent relevant session with resumable: true
 4. Read full session note
 5. Read any linked working/ files
@@ -303,7 +303,7 @@ The architecture optimises tokens at every layer:
 - **read-once** — blocks redundant source code reads, ~2000 tokens saved per prevented re-read
 
 **Rules:**
-- Never call MCP `search_notes` or `read_note` directly — delegate to memberberry
+- Never call MCP `search_simple` or `vault_read` directly — delegate to memberberry
 - For large sessions, run `/handoff` then `/clear`; delegate to blackbox only for explicit "save progress" requests
 - Use `property:read` over `read` when you only need frontmatter
 - Keep session summaries concise — details go in linked files
@@ -325,15 +325,16 @@ The architecture optimises tokens at every layer:
 | `create` / `append` | Note creation |
 | `property:set` | Set frontmatter values |
 
-### MCP-Obsidian (writes)
+### Obsidian MCP (writes)
 
 | Tool | Use For |
 |------|---------|
-| `write_note` | Create/update notes |
-| `patch_note` | Update part of a note |
-| `update_frontmatter` | Modify metadata only |
-| `move_note` | Move/rename notes |
-| `manage_tags` | Tag operations |
+| `vault_write` | Create/replace notes |
+| `vault_append` | Append to a note |
+| `vault_patch` | Update part of a note (heading/block/frontmatter) |
+| `vault_patch` (`targetType="frontmatter"`) | Modify metadata only |
+| `vault_move` | Move/rename notes |
+| `tag_list` | Tag operations |
 
 ---
 
