@@ -6,6 +6,7 @@ allowed-tools:
   - "mcp__obsidian__vault_read"
   - "mcp__obsidian__search_simple"
   - "mcp__obsidian__vault_list"
+  - "mcp__obsidian__search_query"
 ---
 
 # /memory-load

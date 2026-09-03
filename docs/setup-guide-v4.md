@@ -46,7 +46,18 @@ claude --plugin-dir ~/agent-memory-cc-v2
 
 After editing plugin files, hot-reload with `/reload-plugins`. Once the repo is published as a marketplace, `/plugin install agent-memory@<marketplace>` installs it permanently.
 
-### 3. Verify
+### 3. macOS notes
+
+Verified on macOS 15 (Darwin 25.6) with Claude Code 2.1.259:
+
+- `/bin/bash` is **3.2.57** and there is no Homebrew bash by default. The hooks are written to run under it — do not reintroduce bash-4 constructs (`${var,,}`, `declare -A`, `mapfile`).
+- The userland is BSD, so `sed -i EXPR FILE`, `grep -oP` and `sha1sum` are unavailable. Use the portable idioms already in the repo (`sed` to a temp + `mv`, `sed -n 's//p'`, `sha1sum || shasum -a 1`).
+- `jq` ships with macOS at `/usr/bin/jq`; no install needed.
+- Run the suite under the real interpreter before trusting a change: `HOOKS_DIR=./hooks bash tests/hook-validation.sh <project> <slug>`. `bash -n` is **not** sufficient — a bash-4 expansion is a runtime error, not a parse error, so a syntax check passes on a hook that dies on every invocation.
+
+Recorded baseline on this machine: SessionStart cold 261ms / warm 91ms, Stop 14ms, SessionEnd 16ms, UserPromptSubmit 14ms.
+
+### 4. Verify
 
 In the session:
 
@@ -110,6 +121,45 @@ mkdir -p ~/.claude/memory-staging
 ```
 
 Hooks write here; `/memory-sync` cleans it.
+
+---
+
+## Obsidian MCP Server
+
+The vault **writes** (`/memory-init`, `/memory-sync`, `/decision`) go through MCP. Two servers can provide this, and they expose **different tool names** — the commands in `commands/` are written against the Local REST API tool surface (`vault_read`, `vault_write`, `vault_patch`, `vault_list`, `search_simple`, `search_query`, `vault_append`, `vault_move`, `tag_list`).
+
+### Local REST API plugin (recommended — ships its own MCP server)
+
+The [Local REST API with MCP](https://github.com/coddingtonbear/obsidian-local-rest-api) community plugin (v5+) serves MCP directly from inside Obsidian, so there is no separate server process to install or keep alive.
+
+1. Install **Local REST API** from Obsidian → Community plugins, and enable it.
+2. Copy the API key from the plugin's settings.
+3. Register it at user scope:
+
+```bash
+claude mcp add --transport http obsidian https://127.0.0.1:27124/mcp \
+  --scope user --header "Authorization: Bearer <your-api-key>"
+```
+
+**TLS.** The plugin is HTTPS-only by default with a self-signed certificate, which Node rejects. Rather than disabling verification, trust the plugin's own CA:
+
+```bash
+curl -sk https://127.0.0.1:27124/obsidian-local-rest-api.crt \
+  -o ~/.claude/obsidian-local-rest-api.crt
+```
+
+```json
+// ~/.claude/settings.json → "env"
+"NODE_EXTRA_CA_CERTS": "/Users/<you>/.claude/obsidian-local-rest-api.crt"
+```
+
+Confirm with `claude mcp list` — `obsidian` should report **✔ Connected**. The certificate is valid for one year; re-run the `curl` when the plugin regenerates it.
+
+Because the server lives inside Obsidian, **the app must be running** for any write to succeed.
+
+### MCP-Obsidian (alternative)
+
+[smithery-ai/mcp-obsidian](https://github.com/smithery-ai/mcp-obsidian) also works, but names its tools `read_note` / `write_note` / `patch_note` / `search_notes` / `list_directory`. If you use it, the tool names in `commands/*.md` need mapping back — see the table in the v4 remap commit.
 
 ---
 

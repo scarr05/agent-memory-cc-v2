@@ -500,6 +500,24 @@ else
     TOKEN_FIXTURE="$SCRIPT_DIR/fixtures/transcript-windowed.jsonl"
     TOKEN_STDIN="{\"transcript_path\":\"$TOKEN_FIXTURE\"}"
 
+    # Pin the threshold for these cases. stop-memory.sh resolves it as
+    # project .claude/settings.json -> $HOME/.claude/settings.json -> 150000, so
+    # without this the user's own global handoffTokenThreshold decides the result
+    # and the 155k fixture silently stops exceeding it. Project scope wins, so a
+    # temporary project settings file isolates the test from real user config.
+    TOKEN_SETTINGS=".claude/settings.json"
+    TOKEN_SETTINGS_BACKUP=""
+    TOKEN_SETTINGS_CREATED=0
+    mkdir -p .claude 2>/dev/null || true
+    if [[ -f "$TOKEN_SETTINGS" ]]; then
+        TOKEN_SETTINGS_BACKUP=$(cat "$TOKEN_SETTINGS")
+        jq '.memory.handoffTokenThreshold = 150000' "$TOKEN_SETTINGS" > "$TOKEN_SETTINGS.tmp.$$" \
+            && mv "$TOKEN_SETTINGS.tmp.$$" "$TOKEN_SETTINGS"
+    else
+        TOKEN_SETTINGS_CREATED=1
+        printf '{"memory":{"handoffTokenThreshold":150000}}\n' > "$TOKEN_SETTINGS"
+    fi
+
     # Case A: Token-nudge fires at threshold.
     # seed count=8 so hook increments to 9 (>= 8 floor). No handoff_nudge_sent yet.
     seed_meta 8
@@ -533,6 +551,14 @@ else
         fail "Token-nudge floor gate: fired at count=3 (below 8 floor)"
     else
         pass "Token-nudge floor gate: suppressed below message floor"
+    fi
+
+    # Restore the project settings file the token cases pinned.
+    if [[ "$TOKEN_SETTINGS_CREATED" == "1" ]]; then
+        rm -f "$TOKEN_SETTINGS"
+        rmdir .claude 2>/dev/null || true
+    elif [[ -n "$TOKEN_SETTINGS_BACKUP" ]]; then
+        printf '%s\n' "$TOKEN_SETTINGS_BACKUP" > "$TOKEN_SETTINGS"
     fi
 
     # Restore original meta

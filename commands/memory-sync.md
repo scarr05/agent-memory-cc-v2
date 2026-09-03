@@ -6,6 +6,8 @@ allowed-tools:
   - "mcp__obsidian__search_simple"
   - "mcp__obsidian__vault_list"
   - "mcp__obsidian__vault_patch"
+  - "mcp__obsidian__vault_append"
+  - "mcp__obsidian__search_query"
   - "Agent"
   - "Bash"
   - "Read"
