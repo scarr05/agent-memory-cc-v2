@@ -41,6 +41,7 @@ Six hooks fire on Claude Code lifecycle events:
 ### Project Slug Detection (priority order)
 
 1. `.claude/CLAUDE.md` — `<!-- memory:project-slug=X -->` HTML comment
+   - *1b:* `.claude/memory-state.json` — slug from a prior session; covers a branch or worktree where the CLAUDE.md metadata is missing
 2. `.claude/settings.json` — `memory.projectSlug` field
 3. Git remote origin — repo name extraction
 4. `package.json` / `pyproject.toml` / `Cargo.toml` — project name
