@@ -93,7 +93,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 ## Conventions
 
 - All bash scripts use `set -euo pipefail`
-- **Hooks must run on bash 3.2 + BSD userland (macOS) and bash 4+/GNU (Git Bash, WSL).** No `${var,,}`, `declare -A`, or `mapfile`; no `sed -i EXPR FILE`, `grep -oP`, or bare `sha1sum`. Portable idioms already in the repo: `tr '[:upper:]' '[:lower:]' | sed` for case folding, `sed` to a temp + `mv` for in-place edits, `sha1sum || shasum -a 1`. Note `bash -n` does **not** catch a bash-4 expansion — it is a runtime error, so always execute the hook, not just parse it
+- **Hooks must run on bash 3.2 + BSD userland (macOS) and bash 4+/GNU (Git Bash, WSL).** No `${var,,}`, `declare -A`, or `mapfile`; no `sed -i EXPR FILE`, `grep -oP`, or bare `sha1sum`. Portable idioms already in the repo: `tr '[:upper:]' '[:lower:]' | sed` for case folding, `sed` to a temp + `mv` for in-place edits, `sha1sum || shasum -a 1`. Note `bash -n` does **not** catch a bash-4 expansion — it is a runtime error, so always execute the hook, not just parse it. One codebase for both platforms: gate bash-4 builtins on `BASH_VERSINFO[0] -ge 4` with a bash-3.2 fallback branch rather than forking a per-OS copy. Any hook change must pass `tests/hook-validation.sh` on both a Windows Git Bash and a macOS machine before merge
 - Slug detection logic is duplicated across hook scripts (each script must be self-contained). `stop-memory.sh` uses a minimal `detect_slug_fast` variant for performance
 - Memory metadata in project CLAUDE.md files uses HTML comments (`<!-- memory:key=value -->`) for invisibility in rendered markdown
 - Obsidian notes must always include YAML frontmatter

@@ -87,7 +87,7 @@ Configuration via environment variables — see `hooks/read-once/README.md`.
 ## Prerequisites
 
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed and working
-- An Obsidian MCP server configured and connected — the [Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) plugin (v5+) ships one, and its tool names are what `commands/` are written against; [MCP-Obsidian](https://github.com/smithery-ai/mcp-obsidian) is the alternative. See [docs/setup-guide-v4.md](docs/setup-guide-v4.md#obsidian-mcp-server)
+- An Obsidian MCP server configured and connected — the [Local REST API](https://github.com/coddingtonbear/obsidian-local-rest-api) plugin (v5+) ships one, and gives structural patching and metadata search; [MCP-Obsidian](https://github.com/smithery-ai/mcp-obsidian) is the alternative. See [docs/setup-guide-v4.md](docs/setup-guide-v4.md#obsidian-mcp-server)
 - An Obsidian vault with a `5 Agent Memory/` folder
 - Obsidian 1.12+ with CLI enabled — see [docs/cli-setup.md](docs/cli-setup.md) for per-platform setup
 - Claude Code with subagent support

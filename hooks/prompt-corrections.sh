@@ -23,10 +23,12 @@ if [[ -z "$SLUG" ]]; then
     SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
 fi
 # Defence in depth: clamp so a crafted slug can't traverse out of the staging dir.
-# One tr|sed spawn rather than bash-4 ${var,,}: macOS ships bash 3.2, where the
-# builtin form is a runtime "bad substitution" that kills this hook on every
-# prompt. Same idiom as session-start.sh and stop-memory.sh.
-SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+if (( BASH_VERSINFO[0] >= 4 )); then
+    SLUG="${SLUG,,}"; SLUG="${SLUG//[^a-z0-9-]/}"   # builtins: zero forks on the hot path
+else
+    # bash 3.2 (macOS): ${var,,} is a runtime "bad substitution", so fork tr|sed instead.
+    SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+fi
 [[ -z "$SLUG" ]] && SLUG="unknown"
 
 INDEX="$STAGING_DIR/$SLUG/.corrections-index"
@@ -41,7 +43,7 @@ PROMPT=$(printf '%s' "$RAW" | jq -r '.prompt // empty' 2>/dev/null || true)
 # If the prompt field can't be parsed, match against the raw payload rather than
 # silently miss a correction (fail toward surfacing).
 [[ -z "$PROMPT" ]] && PROMPT="$RAW"
-PROMPT_LC=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]')
+if (( BASH_VERSINFO[0] >= 4 )); then PROMPT_LC="${PROMPT,,}"; else PROMPT_LC=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]'); fi
 
 # Index lines: "<title>|<key>" where <key> is the lowercased, space-separated
 # topic (built by session-start.sh, always newline-terminated via awk's ORS).

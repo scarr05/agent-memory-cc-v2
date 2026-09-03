@@ -116,7 +116,7 @@ Hooks write to `~/.claude/memory-staging/<slug>/` because they can't call MCP. Y
    "Use memberberry to find prior context for <slug>"
 3. memberberry searches via CLI: search → search:context → property:read → selective read
 4. Main agent receives filtered summary (~200 tokens)
-5. If memberberry unavailable, fall back to MCP `search_simple`
+5. If memberberry unavailable, fall back to MCP vault search
 ```
 
 **Or:** the user runs `/memory-load` which does this automatically.
@@ -238,7 +238,7 @@ No approval needed.
 
 **How:**
 ```
-1. vault_read(path="5 Agent Memory/project-index.md")
+1. read note "5 Agent Memory/project-index.md"
 2. Find project row by slug
 3. Update: last session date, key decisions, status
 4. If project not listed, add a new row
@@ -252,7 +252,7 @@ When the user says "continue where we left off" or "resume X":
 
 ```
 1. Get project slug from hook context or .claude/CLAUDE.md
-2. search_simple(query="X") — filter results to sessions/by-project/<slug>/
+2. search vault for "X" — filter results to sessions/by-project/<slug>/
 3. Find most recent relevant session with resumable: true
 4. Read full session note
 5. Read any linked working/ files
@@ -303,7 +303,7 @@ The architecture optimises tokens at every layer:
 - **read-once** — blocks redundant source code reads, ~2000 tokens saved per prevented re-read
 
 **Rules:**
-- Never call MCP `search_simple` or `vault_read` directly — delegate to memberberry
+- Never call MCP vault search or note reads directly — delegate to memberberry
 - For large sessions, run `/handoff` then `/clear`; delegate to blackbox only for explicit "save progress" requests
 - Use `property:read` over `read` when you only need frontmatter
 - Keep session summaries concise — details go in linked files
@@ -329,12 +329,18 @@ The architecture optimises tokens at every layer:
 
 | Tool | Use For |
 |------|---------|
-| `vault_write` | Create/replace notes |
-| `vault_append` | Append to a note |
-| `vault_patch` | Update part of a note (heading/block/frontmatter) |
-| `vault_patch` (`targetType="frontmatter"`) | Modify metadata only |
-| `vault_move` | Move/rename notes |
-| `tag_list` | Tag operations |
+| Verb used in `commands/` | MCP-Obsidian (`@mauricio.wolff/mcp-obsidian`) | Local REST API plugin (v5+) |
+|---|---|---|
+| read note | `read_note` | `vault_read` |
+| read frontmatter only | `get_frontmatter` | `vault_read` (`targetType="frontmatter"`) |
+| list folder | `list_directory` | `vault_list` |
+| write note | `write_note` | `vault_write` |
+| append to note | `patch_note` (old→new at end of file) | `vault_append` |
+| patch note | `patch_note` (literal old→new) | `vault_patch` (heading / block / frontmatter) |
+| update frontmatter | `update_frontmatter` | `vault_patch` (`targetType="frontmatter"`) |
+| search vault | `search_notes` | `search_simple` |
+| search vault frontmatter | `search_notes` (`searchFrontmatter=true`) | `search_query` (JsonLogic) |
+| move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
 
 ---
 

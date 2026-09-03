@@ -508,6 +508,17 @@ else
     TOKEN_SETTINGS=".claude/settings.json"
     TOKEN_SETTINGS_BACKUP=""
     TOKEN_SETTINGS_CREATED=0
+    # Restore on ANY exit (set -e abort included) so a failing case never leaves
+    # the user's real project settings pinned to the test threshold.
+    restore_token_settings() {
+        if [[ "${TOKEN_SETTINGS_CREATED:-0}" == "1" ]]; then
+            rm -f "$TOKEN_SETTINGS"; rmdir .claude 2>/dev/null || true
+        elif [[ -n "${TOKEN_SETTINGS_BACKUP:-}" ]]; then
+            printf '%s\n' "$TOKEN_SETTINGS_BACKUP" > "$TOKEN_SETTINGS"
+        fi
+        TOKEN_SETTINGS_CREATED=0; TOKEN_SETTINGS_BACKUP=""
+    }
+    trap restore_token_settings EXIT
     mkdir -p .claude 2>/dev/null || true
     if [[ -f "$TOKEN_SETTINGS" ]]; then
         TOKEN_SETTINGS_BACKUP=$(cat "$TOKEN_SETTINGS")
@@ -553,13 +564,7 @@ else
         pass "Token-nudge floor gate: suppressed below message floor"
     fi
 
-    # Restore the project settings file the token cases pinned.
-    if [[ "$TOKEN_SETTINGS_CREATED" == "1" ]]; then
-        rm -f "$TOKEN_SETTINGS"
-        rmdir .claude 2>/dev/null || true
-    elif [[ -n "$TOKEN_SETTINGS_BACKUP" ]]; then
-        printf '%s\n' "$TOKEN_SETTINGS_BACKUP" > "$TOKEN_SETTINGS"
-    fi
+    restore_token_settings; trap - EXIT
 
     # Restore original meta
     if [[ -n "$META_BACKUP" ]]; then

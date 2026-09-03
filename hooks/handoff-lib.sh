@@ -11,6 +11,12 @@
 #   if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1; else HANDOFF_LIB=0; fi
 # so a partial install degrades to a no-op rather than crashing the hook.
 
+# In-place sed that works on GNU and BSD/macOS: `sed -i EXPR FILE` is GNU-only
+# (BSD reads EXPR as the backup suffix). Write to a temp and mv.
+sed_i() { # $1=expr $2=file
+    sed "$1" "$2" > "$2.tmp.$$" && mv "$2.tmp.$$" "$2" || { rm -f "$2.tmp.$$"; return 1; }
+}
+
 # Print transcript entries after the LAST compaction boundary. Boundary detection
 # is STRUCTURAL: a cheap grep prefilter finds candidate lines containing the
 # marker substring, then each candidate is confirmed with jq to carry a TOP-LEVEL

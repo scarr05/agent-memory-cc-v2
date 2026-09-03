@@ -94,16 +94,16 @@ If memberberry is unavailable or errors, fall back to the MCP steps below.
 ### 2. Fallback: MCP Search (only if memberberry fails)
 
 ```
-search_simple(query="<slug>")
+search vault for "<slug>"
 ```
 
 Search `5 Agent Memory/sessions/by-project/<slug>/` for recent sessions.
-Use `vault_read` with `targetType="frontmatter"` to scan dates and status before reading full content.
+Read frontmatter only to scan dates and status before reading full content.
 
 ### 3. Fallback: Load Learnings
 
 ```
-search_simple(query="<slug or technology>")
+search vault for "<slug or technology>"
 ```
 
 Search `5 Agent Memory/learnings/` for project-related learnings.
@@ -111,7 +111,7 @@ Search `5 Agent Memory/learnings/` for project-related learnings.
 ### 4. Fallback: Check Working Files
 
 ```
-vault_list(path="5 Agent Memory/working/")
+list folder "5 Agent Memory/working/"
 ```
 
 Read any active working files for this project.

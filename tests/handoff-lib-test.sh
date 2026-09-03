@@ -7,13 +7,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../hooks/handoff-lib.sh"
 FIX="$HERE/fixtures/transcript-windowed.jsonl"
 
-# In-place sed that works on both GNU and BSD/macOS userlands: `sed -i EXPR FILE`
-# is GNU-only — BSD sed reads EXPR as the backup suffix and errors.
-sed_i() { # $1=expr $2=file
-    local expr="$1" file="$2"
-    sed "$expr" "$file" > "$file.tmp.$$" && mv "$file.tmp.$$" "$file"
-}
-
 PASS=0; FAIL=0
 assert_eq() { # $1=label $2=expected $3=actual
     if [[ "$2" == "$3" ]]; then PASS=$((PASS+1)); else

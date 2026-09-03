@@ -126,7 +126,20 @@ Hooks write here; `/memory-sync` cleans it.
 
 ## Obsidian MCP Server
 
-The vault **writes** (`/memory-init`, `/memory-sync`, `/decision`) go through MCP. Two servers can provide this, and they expose **different tool names** — the commands in `commands/` are written against the Local REST API tool surface (`vault_read`, `vault_write`, `vault_patch`, `vault_list`, `search_simple`, `search_query`, `vault_append`, `vault_move`, `tag_list`).
+The vault **writes** (`/memory-init`, `/memory-sync`, `/decision`) go through MCP. Two servers can provide this and they expose **different tool names**, so `commands/` describe operations as verbs and allow both name sets. Register whichever you use under the server name `obsidian`.
+
+| Verb used in `commands/` | MCP-Obsidian (`@mauricio.wolff/mcp-obsidian`) | Local REST API plugin (v5+) |
+|---|---|---|
+| read note | `read_note` | `vault_read` |
+| read frontmatter only | `get_frontmatter` | `vault_read` (`targetType="frontmatter"`) |
+| list folder | `list_directory` | `vault_list` |
+| write note | `write_note` | `vault_write` |
+| append to note | `patch_note` (old→new at end of file) | `vault_append` |
+| patch note | `patch_note` (literal old→new) | `vault_patch` (heading / block / frontmatter) |
+| update frontmatter | `update_frontmatter` | `vault_patch` (`targetType="frontmatter"`) |
+| search vault | `search_notes` | `search_simple` |
+| search vault frontmatter | `search_notes` (`searchFrontmatter=true`) | `search_query` (JsonLogic) |
+| move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
 
 ### Local REST API plugin (recommended — ships its own MCP server)
 
@@ -159,7 +172,7 @@ Because the server lives inside Obsidian, **the app must be running** for any wr
 
 ### MCP-Obsidian (alternative)
 
-[smithery-ai/mcp-obsidian](https://github.com/smithery-ai/mcp-obsidian) also works, but names its tools `read_note` / `write_note` / `patch_note` / `search_notes` / `list_directory`. If you use it, the tool names in `commands/*.md` need mapping back — see the table in the v4 remap commit.
+[smithery-ai/mcp-obsidian](https://github.com/smithery-ai/mcp-obsidian) also works, but names its tools `read_note` / `write_note` / `patch_note` / `search_notes` / `list_directory`. Runs as a separate `npx` process straight against the vault files, so it works with Obsidian closed, but its patch is a literal string replace and its search has no metadata filtering.
 
 ---
 

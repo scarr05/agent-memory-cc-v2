@@ -1,12 +1,22 @@
 ---
 description: "Log a decision to the project's _decisions.md without a full session sync. Use for ad-hoc decisions in quick conversations."
 allowed-tools:
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__write_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__patch_note"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__update_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__get_notes_info"
   - "mcp__obsidian__vault_read"
   - "mcp__obsidian__vault_write"
-  - "mcp__obsidian__search_simple"
+  - "mcp__obsidian__vault_append"
   - "mcp__obsidian__vault_patch"
   - "mcp__obsidian__vault_list"
-  - "mcp__obsidian__vault_append"
+  - "mcp__obsidian__search_simple"
+  - "mcp__obsidian__search_query"
   - "Bash"
   - "Read"
   - "Grep"
@@ -49,13 +59,13 @@ If context or rationale are missing, ask for them:
 ## Step 3: Check for Existing Decisions Log
 
 ```
-vault_list(path="5 Agent Memory/sessions/by-project/<slug>/")
+list folder "5 Agent Memory/sessions/by-project/<slug>/"
 ```
 
 If `_decisions.md` exists, read it to check for duplicates:
 
 ```
-vault_read(path="5 Agent Memory/sessions/by-project/<slug>/_decisions.md")
+read note "5 Agent Memory/sessions/by-project/<slug>/_decisions.md"
 ```
 
 If the decision is already logged (same topic), tell the user and ask if they want to update or add a new entry.
@@ -64,7 +74,7 @@ If the decision is already logged (same topic), tell the user and ask if they wa
 
 If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders with the actual values.
 
-Append the new entry using `vault_append` (or `vault_patch` with `operation="append"` to land it under a specific heading):
+Append the new entry (patch under the `## Decisions` heading if the server supports structural patch, else plain append):
 
 ```markdown
 

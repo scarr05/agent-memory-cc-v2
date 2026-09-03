@@ -20,7 +20,7 @@ The SessionStart hook fires before your first response and injects:
 The hook gives you the slug and dynamic state. For prior context:
 
 1. Delegate to the **memberberry** subagent — it searches the vault using the Obsidian CLI and returns a filtered summary.
-2. Do NOT call MCP `search_simple` or read vault notes directly — memberberry handles this more efficiently via Haiku.
+2. Do NOT call MCP vault search or read vault notes directly — memberberry handles this more efficiently via Haiku.
 3. Briefly state what memberberry found and how it applies.
 4. Do NOT read `5 Agent Memory/_context.md` unless you specifically need my current priorities.
 
@@ -70,8 +70,20 @@ Key commands: `search`, `search:context`, `property:read`, `read`, `backlinks`, 
 
 ### Obsidian MCP (writes — and fallback reads)
 
-- **Writes:** vault_write, vault_append, vault_patch (targetType heading|block|frontmatter), vault_move, vault_copy, vault_delete
-- **Reads (fallback if subagents unavailable):** vault_read (add targetType="frontmatter" for metadata only), vault_list, vault_get_document_map, search_simple (content), search_query (JsonLogic over frontmatter/tags/path/stat)
+Commands describe vault operations as verbs; map them to whichever server is registered as `obsidian`:
+
+| Verb used in `commands/` | MCP-Obsidian (`@mauricio.wolff/mcp-obsidian`) | Local REST API plugin (v5+) |
+|---|---|---|
+| read note | `read_note` | `vault_read` |
+| read frontmatter only | `get_frontmatter` | `vault_read` (`targetType="frontmatter"`) |
+| list folder | `list_directory` | `vault_list` |
+| write note | `write_note` | `vault_write` |
+| append to note | `patch_note` (old→new at end of file) | `vault_append` |
+| patch note | `patch_note` (literal old→new) | `vault_patch` (heading / block / frontmatter) |
+| update frontmatter | `update_frontmatter` | `vault_patch` (`targetType="frontmatter"`) |
+| search vault | `search_notes` | `search_simple` |
+| search vault frontmatter | `search_notes` (`searchFrontmatter=true`) | `search_query` (JsonLogic) |
+| move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
 
 ### Subagents
 

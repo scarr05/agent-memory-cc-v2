@@ -1,12 +1,22 @@
 ---
 description: "Initialise a project for the memory system. Detects project from repo/folder, creates CLAUDE.md with memory metadata, sets up Obsidian folder structure, loads prior context. Run this once per project or re-run to refresh. The /init on steroids."
 allowed-tools:
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__write_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__patch_note"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__update_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__get_notes_info"
   - "mcp__obsidian__vault_read"
   - "mcp__obsidian__vault_write"
-  - "mcp__obsidian__search_simple"
-  - "mcp__obsidian__vault_list"
-  - "mcp__obsidian__vault_patch"
   - "mcp__obsidian__vault_append"
+  - "mcp__obsidian__vault_patch"
+  - "mcp__obsidian__vault_list"
+  - "mcp__obsidian__search_simple"
+  - "mcp__obsidian__search_query"
   - "Bash"
   - "Read"
   - "Write"
@@ -94,7 +104,7 @@ Based on detected stack and repo content, infer the Obsidian area:
 ### 1.8 Check Obsidian for Prior History
 
 ```
-search_simple(query="<detected-slug>")
+search vault for "<detected-slug>"
 ```
 
 Search `5 Agent Memory/sessions/` and `5 Agent Memory/learnings/` for any prior work on this project.
@@ -226,17 +236,17 @@ Via MCP-Obsidian:
 ### 4.1 Session Folder
 
 ```
-vault_list(path="5 Agent Memory/sessions/by-project/")
+list folder "5 Agent Memory/sessions/by-project/"
 ```
 
 If `<slug>/` doesn't exist:
 ```
-vault_write(path="5 Agent Memory/sessions/by-project/<slug>/.gitkeep", content="")
+write note "5 Agent Memory/sessions/by-project/<slug>/.gitkeep" with ""
 ```
 
 Or create an index note:
 ```
-vault_write(path="5 Agent Memory/sessions/by-project/<slug>/_index.md", content=<content>)
+write note "5 Agent Memory/sessions/by-project/<slug>/_index.md" with <content>
 ```
 
 With content:
@@ -274,7 +284,7 @@ If `project-index.md` doesn't exist → create it using the template from the ar
 ### 4.5.1 Check for Existing Decisions Log
 
 ```
-vault_list(path="5 Agent Memory/sessions/by-project/<slug>/")
+list folder "5 Agent Memory/sessions/by-project/<slug>/"
 ```
 
 If `_decisions.md` already exists, skip this phase (idempotent).
@@ -284,8 +294,8 @@ If `_decisions.md` already exists, skip this phase (idempotent).
 If `_decisions.md` doesn't exist, scan existing session notes for `decisions:` frontmatter:
 
 ```
-vault_read(path="<each session note returned by the vault_list above>")
-# vault_read returns frontmatter + stat per note; read the `decisions:` field from each
+read note "<each session note from the folder listing above>"
+# read each note frontmatter-only; take the `decisions:` field
 ```
 
 For each session note that has a `decisions:` frontmatter array, collect the decisions.
@@ -321,7 +331,7 @@ Found <N> decisions across <M> sessions. Proposed _decisions.md:
 3. After confirmation, write via MCP:
 
 ```
-vault_write(path="5 Agent Memory/sessions/by-project/<slug>/_decisions.md", content=<content>)
+write note "5 Agent Memory/sessions/by-project/<slug>/_decisions.md" with <content>
 ```
 
 If no existing sessions have decisions, create an empty `_decisions.md` with frontmatter only — ready for the first `/memory-sync` or `/decision` to populate.
