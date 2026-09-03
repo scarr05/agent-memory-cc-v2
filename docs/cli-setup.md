@@ -75,13 +75,30 @@ obsidian version
 
 ### macOS
 
-CLI is registered via Settings → General → CLI. Available in all terminals after restart.
+CLI is registered via **Settings → General → Advanced → Command line interface**. Enabling it symlinks the binary onto `PATH`; it is available in all terminals after a restart.
 
 ```bash
 obsidian version
+# Expected: 1.13.x (installer 1.13.x)
 ```
 
-If not found, check if the Obsidian app bundle includes the CLI binary and add its location to PATH.
+Verified on macOS 15 with Obsidian 1.13.7: the enable step creates `/usr/local/bin/obsidian`, so no `OBSIDIAN_CLI_PATH` is needed.
+
+If `obsidian` is still not found, the binary ships inside the app bundle at
+`/Applications/Obsidian.app/Contents/MacOS/obsidian-cli`. Point the hooks at it directly:
+
+```json
+// ~/.claude/settings.json → "env"
+"OBSIDIAN_CLI_PATH": "/Applications/Obsidian.app/Contents/MacOS/obsidian-cli"
+```
+
+> **Enable the CLI in Settings before you rely on it.** Running the binary while
+> the CLI is still disabled prints `Command line interface is not enabled` and
+> **exits 0 anyway**. `session-start.sh` probes availability with
+> `"$OBS" version >/dev/null 2>&1`, an exit-status check, so an installed-but-disabled
+> CLI reads as *available* and the four vault queries return the disabled notice
+> instead of results. The symptom is an empty vault fragment rather than the
+> honest "Obsidian CLI unavailable" message.
 
 ### Linux
 

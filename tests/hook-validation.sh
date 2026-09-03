@@ -65,6 +65,51 @@ echo ""
 # Ensure we're in the project dir for hooks that use relative paths
 cd "$PROJECT_DIR"
 
+# --- Live staging guard ---
+# Pointed at a real project, the hooks under test write to the REAL
+# ~/.claude/memory-staging/<slug>/ — so a validation run rewrites the state of the
+# session running it. The breadcrumb is the damaging one: the hooks record the
+# fixture transcript path in .transcript-path, and the next /handoff then harvests
+# the fixture instead of the live conversation and silently loses the work unit.
+# Snapshot before the first hook fires; copy back on ANY exit (set -e abort
+# included). Copy-back only, never rm -rf the live tree: a stray test file left
+# behind is a far cheaper failure than wiping real staging state.
+#
+# ponytail: whole-tree copy (~640K today) rather than just the slug dirs under
+# test — the second target is ${SS_DETECTED_SLUG:-$PROJECT_NAME}, which is only
+# known AFTER the first hook run, i.e. the very run that pollutes. ~0.5s per copy
+# against a ~20s suite. Narrow it to a two-phase per-slug snapshot if the tree
+# ever grows enough to show up in the run time.
+# ponytail: snapshot-restore, not the HOME=$(mktemp -d) isolation that
+# handoff-lib-test.sh uses. Ceiling: a hook fired by a concurrent real session
+# between snapshot and restore is overwritten by the copy-back. HOME isolation is
+# the deeper fix but needs the ~9 $HOME-derived paths reworked AND the vault-cache
+# and Obsidian-CLI probe state re-seeded, since the warm-hit tests assert on it.
+LIVE_STAGING="$HOME/.claude/memory-staging"
+STAGING_SNAPSHOT=""
+restore_live_staging() {
+    # Idempotent: rm -rf clears the dir, so a second call returns at the guard.
+    [[ -d "$STAGING_SNAPSHOT" ]] || return 0
+    cp -a "$STAGING_SNAPSHOT/." "$LIVE_STAGING/" 2>/dev/null || true
+    rm -rf "$STAGING_SNAPSHOT"
+}
+
+# Stub so the single EXIT trap below can name both cleanups before the real
+# restore_token_settings exists. Bash resolves trap function names at fire time,
+# so the later definition wins. One registration, so a future cleanup can never
+# be added by a `trap` that silently drops the others — which is the bug class
+# this guard exists to prevent.
+restore_token_settings() { :; }
+trap 'restore_token_settings; restore_live_staging' EXIT
+
+if [[ -d "$LIVE_STAGING" ]]; then
+    STAGING_SNAPSHOT=$(mktemp -d "${TMPDIR:-/tmp}/hookval-staging.XXXXXX")
+    # The snapshot holds handoff narratives and session meta. mktemp -d is 0700 on
+    # POSIX, but Git Bash's permission emulation reports 0755 — pin it either way.
+    chmod 700 "$STAGING_SNAPSHOT" 2>/dev/null || true
+    cp -a "$LIVE_STAGING/." "$STAGING_SNAPSHOT/" 2>/dev/null || true
+fi
+
 # --- Test: session-start.sh ---
 echo "--- session-start.sh ---"
 
@@ -500,6 +545,36 @@ else
     TOKEN_FIXTURE="$SCRIPT_DIR/fixtures/transcript-windowed.jsonl"
     TOKEN_STDIN="{\"transcript_path\":\"$TOKEN_FIXTURE\"}"
 
+    # Pin the threshold for these cases. stop-memory.sh resolves it as
+    # project .claude/settings.json -> $HOME/.claude/settings.json -> 150000, so
+    # without this the user's own global handoffTokenThreshold decides the result
+    # and the 155k fixture silently stops exceeding it. Project scope wins, so a
+    # temporary project settings file isolates the test from real user config.
+    TOKEN_SETTINGS=".claude/settings.json"
+    TOKEN_SETTINGS_BACKUP=""
+    TOKEN_SETTINGS_CREATED=0
+    # Restore on ANY exit (set -e abort included) so a failing case never leaves
+    # the user's real project settings pinned to the test threshold.
+    restore_token_settings() {
+        if [[ "${TOKEN_SETTINGS_CREATED:-0}" == "1" ]]; then
+            rm -f "$TOKEN_SETTINGS"; rmdir .claude 2>/dev/null || true
+        elif [[ -n "${TOKEN_SETTINGS_BACKUP:-}" ]]; then
+            printf '%s\n' "$TOKEN_SETTINGS_BACKUP" > "$TOKEN_SETTINGS"
+        fi
+        TOKEN_SETTINGS_CREATED=0; TOKEN_SETTINGS_BACKUP=""
+    }
+    # No trap call here: the single EXIT trap at the top already names this
+    # function, and this definition overrides the stub.
+    mkdir -p .claude 2>/dev/null || true
+    if [[ -f "$TOKEN_SETTINGS" ]]; then
+        TOKEN_SETTINGS_BACKUP=$(cat "$TOKEN_SETTINGS")
+        jq '.memory.handoffTokenThreshold = 150000' "$TOKEN_SETTINGS" > "$TOKEN_SETTINGS.tmp.$$" \
+            && mv "$TOKEN_SETTINGS.tmp.$$" "$TOKEN_SETTINGS"
+    else
+        TOKEN_SETTINGS_CREATED=1
+        printf '{"memory":{"handoffTokenThreshold":150000}}\n' > "$TOKEN_SETTINGS"
+    fi
+
     # Case A: Token-nudge fires at threshold.
     # seed count=8 so hook increments to 9 (>= 8 floor). No handoff_nudge_sent yet.
     seed_meta 8
@@ -534,6 +609,9 @@ else
     else
         pass "Token-nudge floor gate: suppressed below message floor"
     fi
+
+    # Restore now; the EXIT trap will call it again harmlessly (it self-clears).
+    restore_token_settings
 
     # Restore original meta
     if [[ -n "$META_BACKUP" ]]; then

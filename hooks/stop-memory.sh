@@ -135,7 +135,8 @@ if [[ "$MSG_NOW" -ge 8 ]] && ! grep -q '^handoff_nudge_sent=true' "$META_FILE" 2
             # Upsert the once-per-session flag (replace if present, else append) so it
             # can never accumulate duplicate lines across runs.
             if grep -q '^handoff_nudge_sent=' "$META_FILE" 2>/dev/null; then
-                sed -i 's/^handoff_nudge_sent=.*/handoff_nudge_sent=true/' "$META_FILE" 2>/dev/null || true
+                # Portable in-place sed (BSD has no `sed -i EXPR FILE`); same idiom as sed_i in handoff-lib.sh.
+                { sed 's/^handoff_nudge_sent=.*/handoff_nudge_sent=true/' "$META_FILE" > "$META_FILE.tmp.$$" && mv "$META_FILE.tmp.$$" "$META_FILE"; } 2>/dev/null || rm -f "$META_FILE.tmp.$$" 2>/dev/null || true
             else
                 echo "handoff_nudge_sent=true" >> "$META_FILE" 2>/dev/null || true
             fi

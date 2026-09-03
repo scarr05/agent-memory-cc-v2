@@ -4,12 +4,19 @@ allowed-tools:
   - "mcp__obsidian__read_note"
   - "mcp__obsidian__write_note"
   - "mcp__obsidian__search_notes"
-  - "mcp__obsidian__get_frontmatter"
-  - "mcp__obsidian__list_directory"
-  - "mcp__obsidian__update_frontmatter"
   - "mcp__obsidian__patch_note"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__update_frontmatter"
+  - "mcp__obsidian__list_directory"
   - "mcp__obsidian__read_multiple_notes"
   - "mcp__obsidian__get_notes_info"
+  - "mcp__obsidian__vault_read"
+  - "mcp__obsidian__vault_write"
+  - "mcp__obsidian__vault_append"
+  - "mcp__obsidian__vault_patch"
+  - "mcp__obsidian__vault_list"
+  - "mcp__obsidian__search_simple"
+  - "mcp__obsidian__search_query"
   - "Agent"
   - "Bash"
   - "Read"
@@ -46,7 +53,7 @@ If this session was trivial (quick Q&A, no decisions), say so and ask if the use
 ### Step 2: Check for Prior Sessions
 
 ```
-search_notes(query="<project-name>", searchContent=true)
+search vault for "<project-name>"
 ```
 
 Search `5 Agent Memory/sessions/` for recent sessions on the same project. Note any continuity (is this a continuation of prior work?).
@@ -67,7 +74,7 @@ cat ~/.claude/memory-staging/<slug>/handoff.consumed.md 2>/dev/null
 3. Search the vault for an existing session note from the **same effort** (overlapping file list — the same files touched across consecutive sessions signal one continuous effort):
 
 ```
-search_notes(query="<2-3 distinctive file basenames from the fingerprint>", searchContent=true)
+search vault for "<2-3 distinctive file basenames from the fingerprint>"
 ```
 
 4. **If an overlapping recent session note exists** (same project, file-list overlap, `resumable: true`): UPDATE it in place — append new Progress/Decisions/Open Items — instead of creating a new note. Set its `status` to reflect the latest state.
@@ -141,16 +148,16 @@ If any decisions were made this session (from the `decisions:` frontmatter array
 1. Check if `_decisions.md` exists in the project folder:
 
 ```
-list_directory("5 Agent Memory/sessions/by-project/<project-slug>/")
+list folder "5 Agent Memory/sessions/by-project/<project-slug>/"
 ```
 
 2. If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders:
 
 ```
-write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <content from template>)
+write note "5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md" with <content from template>
 ```
 
-3. For each decision in the session's `decisions:` array, append an entry using `patch_note`:
+3. For each decision in the session's `decisions:` array, append an entry (patch under the `## Decisions` heading if the server supports structural patch, else plain append):
 
 ```markdown
 
@@ -161,14 +168,14 @@ write_note("5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md", <c
 **Source:** [[<session-note-filename>]]
 ```
 
-4. Update the `modified` date in `_decisions.md` frontmatter using `update_frontmatter`.
+4. Update the `modified` date in `_decisions.md` frontmatter by updating the note frontmatter.
 
 ### Step 4: Pattern Detection
 
 Review the session for recurring patterns. Check against existing learnings:
 
 ```
-search_notes(query="<pattern keywords>", searchContent=true)
+search vault for "<pattern keywords>"
 ```
 
 Search `5 Agent Memory/learnings/` for related learnings.
@@ -185,18 +192,27 @@ If you spot an EXISTING learning that should be updated:
 **Direction-change corrections (from the handoff scratch):** the handoff's `## Do-Not-Redo` block (between its `<!-- HANDOFF:DONOTREDO:START -->` / `:END` markers) records the dead-ends and direction shifts of this effort — the clean, authoritative channel. For each line in that block that is not already in `5 Agent Memory/learnings/corrections/`:
 
 ```
-search_notes(query="<key phrase from the correction>", searchContent=true)
+search vault for "<key phrase from the correction>"
 ```
 
 If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it in future sessions whenever a prompt touches that topic (its index is rebuilt at SessionStart). A correction counts as "new" when the current handoff's Do-Not-Redo lines differ from the prior `.consumed` handoff's.
 
 ### Step 5: Update Project Index
 
-Read `5 Agent Memory/project-index.md` and update the relevant project row with:
+Read `5 Agent Memory/project-index.md` and **replace** (never append to) the project's row:
 - Last session date
-- Any new key decisions
+- Status: one short sentence
+- Latest key decision: one short sentence — the single most recent, not a running list
 
-If the project isn't in the index, add it.
+Hard rules: each cell under 120 characters, no bold headlines, no wikilinks, no narrative. Detail belongs in the session note. If the project isn't in the index, add a row.
+
+Before writing, check the result with:
+
+```bash
+# ponytail: any row over 400 chars means narrative crept in — rewrite that row, do not write the file
+# (no $0 here on purpose: slash-command argument substitution rewrites it)
+awk '/^\| / && length > 400 { print "ROW TOO LONG at line " NR; bad=1 } END { exit bad }' "<vault>/5 Agent Memory/project-index.md"
+```
 
 ### Step 6: Clean Up Staging
 
@@ -209,13 +225,18 @@ Check `~/.claude/memory-staging/<slug>/` for:
 ```bash
 rm -f ~/.claude/memory-staging/<slug>/handoff.md ~/.claude/memory-staging/<slug>/handoff.consumed.md
 META=~/.claude/memory-staging/<slug>/.session-meta
-sed -i 's/message_count=[0-9]*/message_count=0/' "$META" || true
+
+# `sed -i EXPR FILE` is GNU-only — BSD/macOS sed reads EXPR as the backup suffix
+# and errors. Write to a temp and mv; works on both userlands.
+sed_i() { sed "$1" "$2" > "$2.tmp.$$" && mv "$2.tmp.$$" "$2" || rm -f "$2.tmp.$$"; }  # same as handoff-lib.sh
+
+sed_i 's/message_count=[0-9]*/message_count=0/' "$META" || true
 
 # Mark synced (SessionEnd reads this) and clear any stale unsynced marker. Upsert
 # the flag (replace if present, else append) so repeat syncs never pile up
 # duplicate synced= lines.
 if grep -q '^synced=' "$META" 2>/dev/null; then
-    sed -i 's/^synced=.*/synced=true/' "$META"
+    sed_i 's/^synced=.*/synced=true/' "$META"
 else
     echo "synced=true" >> "$META"
 fi
@@ -249,7 +270,7 @@ Read `MEMORY.md` and any topic files in that directory.
 
 Search Obsidian for each auto-memory item:
 ```
-search_notes(query="<key phrase from auto-memory>", searchContent=true)
+search vault for "<key phrase from auto-memory>"
 ```
 
 Skip anything already captured in vault learnings or sessions.
@@ -321,18 +342,18 @@ If found, read `MEMORY.md` and note existing entries.
 **Tier 3 — Obsidian vault (via MCP):**
 
 ```
-read_note("5 Agent Memory/project-index.md")
-list_directory("5 Agent Memory/sessions/by-project/<slug>/")
-list_directory("5 Agent Memory/learnings/")
+read note "5 Agent Memory/project-index.md"
+list folder "5 Agent Memory/sessions/by-project/<slug>/"
+list folder "5 Agent Memory/learnings/"
 ```
 
 If `_decisions.md` exists, read it:
 
 ```
-read_note("5 Agent Memory/sessions/by-project/<slug>/_decisions.md")
+read note "5 Agent Memory/sessions/by-project/<slug>/_decisions.md"
 ```
 
-Read the 2-3 most recent session notes (frontmatter only via `get_frontmatter`) to understand what's already been captured.
+Read the 2-3 most recent session notes (frontmatter only) to understand what's already been captured.
 
 Build a mental map: what topics are covered, what decisions are logged, what learnings exist. This is the deduplication baseline — dream only extracts what's genuinely new.
 
@@ -386,7 +407,7 @@ For each finding, search the vault for existing coverage:
 - **Preferences** — search `5 Agent Memory/learnings/preferences/` for the same preference.
 - **Workflow patterns** — search `5 Agent Memory/learnings/workflow/` for the same pattern.
 
-Use `search_notes(query="<key phrase>", searchContent=true)` for each finding.
+Use `search vault for "<key phrase>"` for each finding.
 
 #### 3.2 Detect Contradictions
 
@@ -436,7 +457,8 @@ This absorbs the existing `--ingest` behaviour. Running `/memory-sync --ingest` 
 Search for sessions older than 90 days:
 
 ```
-search_notes(query="status: complete", searchFrontmatter=true)
+search vault frontmatter for status == "complete" under "5 Agent Memory/sessions/"
+# REST server: search_query with JsonLogic; mcp-obsidian: search_notes(searchFrontmatter=true)
 ```
 
 For each session older than 90 days with `status: complete` and no `promoted_to` field, add to the prune list in the dream report.
@@ -451,7 +473,7 @@ Read `5 Agent Memory/project-index.md`. For the current project:
 - Update any other stale fields
 
 ```
-patch_note("5 Agent Memory/project-index.md", <old row>, <new row>)
+patch note "5 Agent Memory/project-index.md": replace this project's row only (never rewrite the whole table)
 ```
 
 #### 4.3 Date Normalisation
@@ -459,7 +481,7 @@ patch_note("5 Agent Memory/project-index.md", <old row>, <new row>)
 Scan recent vault notes (last 30 days of session notes for this project) for relative dates:
 - "yesterday", "today", "last week", "next Monday", etc.
 
-Convert each to an absolute date based on the note's `created` frontmatter date. Use `patch_note` for each replacement.
+Convert each to an absolute date based on the note's `created` frontmatter date. Patch the note for each replacement.
 
 #### 4.4 Write Dream Timestamp
 
@@ -507,12 +529,12 @@ After all four phases, present the full report for approval:
 ```
 
 The user checks boxes for what to write. For each checked item:
-- **Decisions** → append to `_decisions.md` via `patch_note`
-- **Learnings** → write to appropriate `learnings/<category>/` subfolder via `write_note`
+- **Decisions** → append to `_decisions.md` by appending to the note
+- **Learnings** → write to appropriate `learnings/<category>/` subfolder by writing the note
 - **Contradictions** → user states which version to keep; update or remove the stale record
 - **Auto-memory items** → write to stated destination
 - **Stale sessions** → move to archive or delete (as user directs)
-- **Date corrections** → apply via `patch_note`
+- **Date corrections** → patch the note
 
 Unchecked items are discarded.
 

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. MCP-Obsidian configured and working in Claude Code
+1. An Obsidian MCP server configured and working in Claude Code (the Local REST API plugin ships one; MCP-Obsidian also works)
 2. `5 Agent Memory/` folder structure exists in vault (see vault-manager skill)
 3. **Hooks deployed** — `session-start.sh`, `pre-compact.sh`, `stop-memory.sh` in `~/.claude/hooks/`
 4. **Slash commands deployed** — `memory-init.md`, `memory-sync.md`, `memory-load.md` in `~/.claude/commands/`
@@ -26,7 +26,7 @@ This overwrites the v1 skill. The v2 skill is backwards-compatible with existing
 If not already created, set up the v2 folder structure:
 
 ```bash
-# Via Claude Code with MCP-Obsidian, or manually:
+# Via Claude Code with the Obsidian MCP server, or manually:
 mkdir -p "5 Agent Memory/sessions/by-project"
 mkdir -p "5 Agent Memory/sessions/general"
 mkdir -p "5 Agent Memory/learnings/preferences"

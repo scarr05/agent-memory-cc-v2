@@ -120,7 +120,7 @@ assert_eq "finalize aborted => file removed" "no" "$([[ -f "$OUT" ]] && echo yes
 # created value is double-quoted (finalize must strip quotes before re-stamping).
 build_deterministic_handoff --transcript "$FIX" --slug "demo-proj" --source handoff --out "$OUT"
 # simulate Claude filling the narrative (replaces the sentinel line; markers remain)
-sed -i 's/<!-- HANDOFF:NARRATIVE -->/We are mid-way through wiring the clear branch; next edit session-start.sh:165./' "$OUT"
+sed_i 's/<!-- HANDOFF:NARRATIVE -->/We are mid-way through wiring the clear branch; next edit session-start.sh:165./' "$OUT"
 assert_contains "extract_block: filled => prose" "mid-way through wiring" "$(extract_block NARRATIVE "$OUT")"
 printf -- '---\ncreated: "2026-06-14T09:00:00Z"\n---\n' > "$TMPD/consumed.md"
 FIN_OK="$(finalize_handoff --out "$OUT" --consumed "$TMPD/consumed.md"; echo "rc=$?")"
@@ -131,7 +131,7 @@ assert_contains "finalize stamps supersedes"   'supersedes: "2026-06-14T09:00:00
 # sentinel comment) must still arm — the thin-guard matches the exact collapsed
 # comment only. (| delimiter avoids the / in the replacement.)
 build_deterministic_handoff --transcript "$FIX" --slug "demo-proj" --source handoff --out "$OUT"
-sed -i 's|<!-- HANDOFF:NARRATIVE -->|Next, replace the HANDOFF:NARRATIVE token in session-start.sh; this narrative is long enough to pass.|' "$OUT"
+sed_i 's|<!-- HANDOFF:NARRATIVE -->|Next, replace the HANDOFF:NARRATIVE token in session-start.sh; this narrative is long enough to pass.|' "$OUT"
 FIN_MENTION="$(finalize_handoff --out "$OUT" --consumed "$TMPD/none.md"; echo "rc=$?")"
 assert_contains "finalize arms narrative mentioning the token" "ARMED" "$FIN_MENTION"
 

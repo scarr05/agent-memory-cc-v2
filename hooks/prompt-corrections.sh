@@ -23,9 +23,12 @@ if [[ -z "$SLUG" ]]; then
     SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
 fi
 # Defence in depth: clamp so a crafted slug can't traverse out of the staging dir.
-# Pure-bash builtins (bash 4+) — no subprocess on this per-prompt hot path.
-SLUG="${SLUG,,}"
-SLUG="${SLUG//[^a-z0-9-]/}"
+if (( BASH_VERSINFO[0] >= 4 )); then
+    SLUG="${SLUG,,}"; SLUG="${SLUG//[^a-z0-9-]/}"   # builtins: zero forks on the hot path
+else
+    # bash 3.2 (macOS): ${var,,} is a runtime "bad substitution", so fork tr|sed instead.
+    SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+fi
 [[ -z "$SLUG" ]] && SLUG="unknown"
 
 INDEX="$STAGING_DIR/$SLUG/.corrections-index"
@@ -40,7 +43,7 @@ PROMPT=$(printf '%s' "$RAW" | jq -r '.prompt // empty' 2>/dev/null || true)
 # If the prompt field can't be parsed, match against the raw payload rather than
 # silently miss a correction (fail toward surfacing).
 [[ -z "$PROMPT" ]] && PROMPT="$RAW"
-PROMPT_LC="${PROMPT,,}"
+if (( BASH_VERSINFO[0] >= 4 )); then PROMPT_LC="${PROMPT,,}"; else PROMPT_LC=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]'); fi
 
 # Index lines: "<title>|<key>" where <key> is the lowercased, space-separated
 # topic (built by session-start.sh, always newline-terminated via awk's ORS).
@@ -63,7 +66,9 @@ MSG="Correction(s) on record for: $HITS. Load the details via memberberry before
 # verified working for the sibling SessionStart hook on this CC version.
 # MEMORY_HOOK_PLAINTEXT=1 falls back to plain stdout (also documented as
 # injected) if additionalContext proves unreliable for this hook.
-if [[ "${MEMORY_HOOK_PLAINTEXT:-0}" == "1" ]]; then
+# No jq => degrade to the documented plaintext channel rather than dying at 127
+# under set -e, having dropped a correction. Parity with session-start.sh.
+if [[ "${MEMORY_HOOK_PLAINTEXT:-0}" == "1" ]] || ! command -v jq >/dev/null 2>&1; then
     echo "$MSG"
 else
     jq -n --arg ctx "$MSG" \

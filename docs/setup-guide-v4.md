@@ -46,7 +46,38 @@ claude --plugin-dir ~/agent-memory-cc-v2
 
 After editing plugin files, hot-reload with `/reload-plugins`. Once the repo is published as a marketplace, `/plugin install agent-memory@<marketplace>` installs it permanently.
 
-### 3. Verify
+### 3. macOS notes
+
+Verified on macOS 15 (Darwin 25.6) with Claude Code 2.1.259:
+
+- `/bin/bash` is **3.2.57** and there is no Homebrew bash by default. The hooks are written to run under it — do not reintroduce bash-4 constructs (`${var,,}`, `declare -A`, `mapfile`).
+- The userland is BSD, so `sed -i EXPR FILE`, `grep -oP` and `sha1sum` are unavailable. Use the portable idioms already in the repo (`sed` to a temp + `mv`, `sed -n 's//p'`, `sha1sum || shasum -a 1`).
+- `jq` ships with macOS at `/usr/bin/jq`; no install needed.
+- Run the suite under the real interpreter before trusting a change: `HOOKS_DIR=./hooks bash tests/hook-validation.sh <project> <slug>`. `bash -n` is **not** sufficient — a bash-4 expansion is a runtime error, not a parse error, so a syntax check passes on a hook that dies on every invocation.
+
+Recorded baseline on this machine: SessionStart cold 261ms / warm 91ms, Stop 14ms, SessionEnd 16ms, UserPromptSubmit 14ms.
+
+**Re-run checklist after pulling `fix/macos-portability` (2026-09-03 changes):**
+
+```bash
+cd ~/agent-memory-cc-v2 && git pull
+# 1. MCP server: MCPVault replaces the Local REST API registration
+claude mcp remove obsidian -s user 2>/dev/null
+npm i -g @bitbonsai/mcpvault
+claude mcp add obsidian --scope user -- mcpvault "/path/to/scarr-Brain"
+claude mcp list | grep obsidian        # expect ✔ Connected
+# 2. Hooks under real bash 3.2 (the bash-4 gate has a 3.2 fallback branch that only this box exercises)
+HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" memory-architecture   # expect 39/39
+bash tests/handoff-lib-test.sh                                               # expect FAIL=0
+# 3. Redeploy if on the manual path (plugin path: /reload-plugins instead)
+cp hooks/*.sh ~/.claude/hooks/ && cp hooks/read-once/hook.sh ~/.claude/hooks/read-once/ && cp commands/*.md ~/.claude/commands/ && cp agents/*.md ~/.claude/agents/
+# 4. Remove the REST cert env if you added it
+grep -n NODE_EXTRA_CA_CERTS ~/.claude/settings.json
+```
+
+If either test suite fails on the 3.2 branch, the fault is in the `else` arm of the `BASH_VERSINFO` gate in `prompt-corrections.sh` or `session-end.sh`.
+
+### 4. Verify
 
 In the session:
 
@@ -110,6 +141,66 @@ mkdir -p ~/.claude/memory-staging
 ```
 
 Hooks write here; `/memory-sync` cleans it.
+
+---
+
+## Obsidian MCP Server
+
+The vault **writes** (`/memory-init`, `/memory-sync`, `/decision`) go through MCP. Two servers can provide this and they expose **different tool names**, so `commands/` describe operations as verbs and allow both name sets. Register whichever you use under the server name `obsidian`. MCPVault is the one in use.
+
+| Verb used in `commands/` | MCPVault (`@bitbonsai/mcpvault`) | Local REST API plugin (v5+) |
+|---|---|---|
+| read note | `read_note` | `vault_read` |
+| read frontmatter only | `get_frontmatter` | `vault_read` (`targetType="frontmatter"`) |
+| list folder | `list_directory` | `vault_list` |
+| write note | `write_note` | `vault_write` |
+| append to note | `patch_note` (old→new at end of file) | `vault_append` |
+| patch note | `patch_note` (literal old→new) | `vault_patch` (heading / block / frontmatter) |
+| update frontmatter | `update_frontmatter` | `vault_patch` (`targetType="frontmatter"`) |
+| search vault | `search_notes` | `search_simple` |
+| search vault frontmatter | `search_notes` (`searchFrontmatter=true`, `pathPrefix` to scope) | `search_query` (JsonLogic) |
+| move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
+
+### MCPVault (recommended)
+
+[bitbonsai/mcpvault](https://github.com/bitbonsai/mcpvault) (formerly `@mauricio.wolff/mcp-obsidian`, renamed at 0.9.0) is the server both machines run. Install it globally and register the binary; do **not** run it as `npx ...@latest`, which hits the npm registry on every Claude Code start and times out (30s) whenever the registry is slow, leaving the session with no vault writes:
+
+```bash
+npm i -g @bitbonsai/mcpvault
+claude mcp add obsidian --scope user -- mcpvault /path/to/vault                                    # macOS/Linux
+MSYS_NO_PATHCONV=1 claude mcp add obsidian --scope user -- cmd /c mcpvault "C:\path\to\vault"   # Windows Git Bash
+```
+
+Upgrade with `npm i -g @bitbonsai/mcpvault@latest` and restart Claude Code. Runs as its own process straight against the vault files, so it works with Obsidian closed. Its patch is a literal string replace and its search scopes by `pathPrefix` only; that covers every write the commands make.
+
+### Local REST API plugin (alternative — not used on Sam's machines since 2026-09-03)
+
+The [Local REST API with MCP](https://github.com/coddingtonbear/obsidian-local-rest-api) community plugin (v5+) serves MCP directly from inside Obsidian, so there is no separate server process to install or keep alive. Its structural `vault_patch` and JsonLogic `search_query` are nicer than MCPVault's, but it needs Obsidian running, a trusted self-signed cert renewed yearly, and a second config to keep in step across machines. Dropped for those reasons; kept here because `commands/` still work with it.
+
+1. Install **Local REST API** from Obsidian → Community plugins, and enable it.
+2. Copy the API key from the plugin's settings.
+3. Register it at user scope:
+
+```bash
+claude mcp add --transport http obsidian https://127.0.0.1:27124/mcp \
+  --scope user --header "Authorization: Bearer <your-api-key>"
+```
+
+**TLS.** The plugin is HTTPS-only by default with a self-signed certificate, which Node rejects. Rather than disabling verification, trust the plugin's own CA:
+
+```bash
+curl -sk https://127.0.0.1:27124/obsidian-local-rest-api.crt \
+  -o ~/.claude/obsidian-local-rest-api.crt
+```
+
+```json
+// ~/.claude/settings.json → "env"
+"NODE_EXTRA_CA_CERTS": "/Users/<you>/.claude/obsidian-local-rest-api.crt"
+```
+
+Confirm with `claude mcp list` — `obsidian` should report **✔ Connected**. The certificate is valid for one year; re-run the `curl` when the plugin regenerates it.
+
+Because the server lives inside Obsidian, **the app must be running** for any write to succeed.
 
 ---
 

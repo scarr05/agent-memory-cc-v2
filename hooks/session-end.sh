@@ -31,10 +31,13 @@ if [[ -z "$SLUG" ]]; then
     SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
 fi
 # Defence in depth: the state-file/CLAUDE.md branches aren't charset-filtered.
-# Clamp so a crafted slug can't traverse out of the staging dir. Pure-bash
-# builtins (bash 4+) keep this side-effect hook subprocess-free past the jq read.
-SLUG="${SLUG,,}"
-SLUG="${SLUG//[^a-z0-9-]/}"
+# Clamp so a crafted slug can't traverse out of the staging dir.
+if (( BASH_VERSINFO[0] >= 4 )); then
+    SLUG="${SLUG,,}"; SLUG="${SLUG//[^a-z0-9-]/}"   # builtins: zero forks on the hot path
+else
+    # bash 3.2 (macOS): ${var,,} is a runtime "bad substitution", so fork tr|sed instead.
+    SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
+fi
 [[ -z "$SLUG" ]] && SLUG="unknown"
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
