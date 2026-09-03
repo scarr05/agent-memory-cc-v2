@@ -210,7 +210,8 @@ Before writing, check the result with:
 
 ```bash
 # ponytail: any row over 400 chars means narrative crept in — rewrite that row, do not write the file
-awk -F'|' '/^\| /{ if (length($0) > 400) { print "ROW TOO LONG: " substr($0,1,60); bad=1 } } END{ exit bad }' "<vault>/5 Agent Memory/project-index.md"
+# (no $0 here on purpose: slash-command argument substitution rewrites it)
+awk '/^\| / && length > 400 { print "ROW TOO LONG at line " NR; bad=1 } END { exit bad }' "<vault>/5 Agent Memory/project-index.md"
 ```
 
 ### Step 6: Clean Up Staging
