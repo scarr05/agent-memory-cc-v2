@@ -329,7 +329,7 @@ The architecture optimises tokens at every layer:
 
 | Tool | Use For |
 |------|---------|
-| Verb used in `commands/` | MCP-Obsidian (`@mauricio.wolff/mcp-obsidian`) | Local REST API plugin (v5+) |
+| Verb used in `commands/` | MCPVault (`@bitbonsai/mcpvault`) | Local REST API plugin (v5+) |
 |---|---|---|
 | read note | `read_note` | `vault_read` |
 | read frontmatter only | `get_frontmatter` | `vault_read` (`targetType="frontmatter"`) |
@@ -339,7 +339,7 @@ The architecture optimises tokens at every layer:
 | patch note | `patch_note` (literal old→new) | `vault_patch` (heading / block / frontmatter) |
 | update frontmatter | `update_frontmatter` | `vault_patch` (`targetType="frontmatter"`) |
 | search vault | `search_notes` | `search_simple` |
-| search vault frontmatter | `search_notes` (`searchFrontmatter=true`) | `search_query` (JsonLogic) |
+| search vault frontmatter | `search_notes` (`searchFrontmatter=true`, `pathPrefix` to scope) | `search_query` (JsonLogic) |
 | move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
 
 ---
