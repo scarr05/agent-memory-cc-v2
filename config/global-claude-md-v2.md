@@ -85,6 +85,11 @@ Commands describe vault operations as verbs; map them to whichever server is reg
 | search vault frontmatter | `search_notes` (`searchFrontmatter=true`, `pathPrefix` to scope) | `search_query` (JsonLogic) |
 | move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
 
+> **`delete_note` needs `confirmPath`.** MCPVault's `delete_note` takes a second argument that must be
+> identical to `path`. Omit it and the call returns `success: false` with a cancellation message rather than
+> throwing — the delete silently does nothing. Pass both and check `success`. Affects `--dream` Phase 4.1 pruning.
+
+
 ### Subagents
 
 - **memberberry** — Memory retrieval. Delegate all vault read operations here.

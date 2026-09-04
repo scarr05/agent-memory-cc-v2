@@ -46,6 +46,12 @@ claude --plugin-dir ~/agent-memory-cc-v2
 
 After editing plugin files, hot-reload with `/reload-plugins`. Once the repo is published as a marketplace, `/plugin install agent-memory@<marketplace>` installs it permanently.
 
+> **`--plugin-dir` did not register the hooks on macOS (2026-09-04, Claude Code 2.1.259).** The plugin's
+> subagents loaded, but `/reload-plugins` reported `0 plugins · 0 skills · 8 agents · 0 hooks`, and no
+> SessionStart context was injected. The manual copy in **Option B** was needed to get the six hooks running.
+> Check with `/reload-plugins` — if it reports `0 hooks`, take Option B rather than assuming the plugin loaded.
+> The commands and subagents work either way; it is only the hook registration that fails to take.
+
 ### 3. macOS notes
 
 Verified on macOS 15 (Darwin 25.6) with Claude Code 2.1.259:
@@ -67,7 +73,7 @@ npm i -g @bitbonsai/mcpvault
 claude mcp add obsidian --scope user -- mcpvault "/path/to/scarr-Brain"
 claude mcp list | grep obsidian        # expect ✔ Connected
 # 2. Hooks under real bash 3.2 (the bash-4 gate has a 3.2 fallback branch that only this box exercises)
-HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" memory-architecture   # expect 39/39
+HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" memory-architecture   # expect 44/44 on macOS, 39-40 on Git Bash (timing WARNs)
 bash tests/handoff-lib-test.sh                                               # expect FAIL=0
 # 3. Redeploy if on the manual path (plugin path: /reload-plugins instead)
 cp hooks/*.sh ~/.claude/hooks/ && cp hooks/read-once/hook.sh ~/.claude/hooks/read-once/ && cp commands/*.md ~/.claude/commands/ && cp agents/*.md ~/.claude/agents/
@@ -112,6 +118,18 @@ cp config/settings.json ~/.claude/settings.json
 ```
 
 Run `/hooks` to confirm all six are registered.
+
+> **Two ways the manual path silently half-installs**, both seen on the macOS box on 2026-09-04:
+>
+> 1. **Copying the hook scripts is not installing them.** With `hooks/` populated but no `hooks` block in
+>    `~/.claude/settings.json`, nothing fires and there is no error — no injected context, no nudges, no
+>    `.unsynced` flag. If `~/.claude/settings.json` already exists, merge the `hooks` block in rather than
+>    copying the file wholesale, or you will overwrite `memory.handoffTokenThreshold` and your theme.
+> 2. **`chmod +x` matters even though the commands say `bash <path>`.** Leave it out and the scripts run
+>    today but break the moment a command form drops the explicit interpreter.
+>
+> Verify both: `python3 -c "import json;print(list(json.load(open('$HOME/.claude/settings.json'))['hooks']))"`
+> should list all six events, and `ls -l ~/.claude/hooks/*.sh` should show `x` on every file.
 
 ### 3. Subagents
 
@@ -160,6 +178,11 @@ The vault **writes** (`/memory-init`, `/memory-sync`, `/decision`) go through MC
 | search vault | `search_notes` | `search_simple` |
 | search vault frontmatter | `search_notes` (`searchFrontmatter=true`, `pathPrefix` to scope) | `search_query` (JsonLogic) |
 | move / delete note | `move_note` / `delete_note` | `vault_move` / `vault_delete` |
+
+> **`delete_note` needs `confirmPath`.** MCPVault's `delete_note` takes a second argument that must be
+> identical to `path`. Omit it and the call returns `success: false` with a cancellation message rather than
+> throwing — the delete silently does nothing. Pass both and check `success`. Affects `--dream` Phase 4.1 pruning.
+
 
 ### MCPVault (recommended)
 
