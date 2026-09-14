@@ -62,7 +62,7 @@ Each hook emits the channel Claude Code actually reads for that event (corrected
 
 ## Installation
 
-Install as a Claude Code plugin (`claude --plugin-dir <repo>`) or copy files into `~/.claude/` manually — see `docs/setup-guide-v4.md` for both paths. The manual copy, in short:
+Install as a Claude Code plugin (`claude --plugin-dir <repo>`) or copy files into `~/.claude/` manually — see `docs/setup-guide-v4.md` for both paths. The two are **mutually exclusive**: each registers the same six hook events, so running both fires every hook twice. On macOS the plugin path registers no hooks (`/reload-plugins` reports `0 hooks`), so the manual path is the working one there. The manual copy, in short:
 - Hook scripts from `hooks/` → `~/.claude/hooks/` (including `read-once/`)
 - `config/settings.json` → `~/.claude/settings.json` (merge if existing)
 - `config/global-claude-md-v2.md` → `~/.claude/CLAUDE.md`

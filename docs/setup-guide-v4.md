@@ -1,6 +1,15 @@
 # Setup Guide — Agent Memory v4
 
-Two ways to install: as a Claude Code **plugin** (recommended — one command registers all six hooks, both subagents, and the slash commands together) or by **manual copy** into `~/.claude/` (the v2 method, still supported as a fallback).
+Two ways to install: as a Claude Code **plugin** (one command registers all six hooks, both subagents, and the slash commands together) or by **manual copy** into `~/.claude/` (the v2 method).
+
+> **Pick one. They are alternatives, not layers.** Both paths register the same six hook events — the plugin
+> through `hooks/hooks.json`, the manual path through the `hooks` block in `~/.claude/settings.json`. With both
+> live, every hook fires twice: message counts increment in pairs, nudges duplicate, and the read-once cache is
+> written by two callers. If you move from one path to the other, tear the first one down — delete the `hooks`
+> block from `~/.claude/settings.json`, or drop the `--plugin-dir` flag — before bringing the second up.
+>
+> On macOS the plugin path does not currently register hooks at all (see Option A step 2), so the manual path is
+> the working one there and the double-fire risk is theoretical until that changes.
 
 ## What You're Installing
 
