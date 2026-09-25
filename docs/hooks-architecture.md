@@ -33,6 +33,8 @@ The project slug drives everything — where sessions get written, where context
 
 ```
 1. .claude/CLAUDE.md → look for `project-slug:` in frontmatter/content
+1b. .claude/memory-state.json → slug written by a prior session (covers a branch
+    or worktree where the CLAUDE.md metadata is absent)
 2. .claude/settings.json → check for custom memory.projectSlug field
 3. git remote → extract repo name from origin URL
 4. package.json / pyproject.toml / Cargo.toml → extract project name
