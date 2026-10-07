@@ -25,8 +25,8 @@ Run every command as `"${OBSIDIAN_CLI_PATH:-obsidian}"` (quoted: the path can co
 
 ## Process
 
-1. **Get the date.** Run `date +%Y-%m-%d` for `<YYYY-MM-DD>` and
-   `date +%Y-%m-%dT%H:%M:%S%z` for the ISO datetime. Don't guess either.
+1. **Get the date.** Run `date +%Y-%m-%dT%H:%M:%S%z` once for the ISO
+   datetime; its first 10 characters are `<YYYY-MM-DD>`. Don't guess it.
 2. **Sanitise the slug** from the calling agent to lowercase letters,
    digits and hyphens before putting it in any path.
 3. **Extract from the calling agent's description:**
@@ -41,25 +41,22 @@ Run every command as `"${OBSIDIAN_CLI_PATH:-obsidian}"` (quoted: the path can co
    Decisions and open items matter most for resumption; progress is
    secondary. If the description is long, weight the most recent state,
    because that is where the current work lives.
-4. **Find an existing checkpoint.** Check your agent memory first, then:
+4. **Find an existing checkpoint.**
    ```bash
    "${OBSIDIAN_CLI_PATH:-obsidian}" search query="<slug>-checkpoint" path="5 Agent Memory/working" format=json
    ```
-   If one exists for this slug, read it and merge (see Merge rules) so
-   there is one checkpoint per slug per day, not duplicates.
-5. **Write** the checkpoint. Use `overwrite` when the file already
-   exists; the content you write is the full merged checkpoint.
+   If one exists for this slug, read it and merge (see Merge rules).
+5. **Write** the full checkpoint, adding `overwrite` when the file
+   already exists:
    ```bash
    "${OBSIDIAN_CLI_PATH:-obsidian}" create path="5 Agent Memory/working/<slug>-checkpoint-<YYYY-MM-DD>.md" content="<checkpoint>"
-   "${OBSIDIAN_CLI_PATH:-obsidian}" create path="5 Agent Memory/working/<slug>-checkpoint-<YYYY-MM-DD>.md" content="<checkpoint>" overwrite
    ```
 6. **Verify** by reading it back:
    ```bash
    "${OBSIDIAN_CLI_PATH:-obsidian}" read path="5 Agent Memory/working/<slug>-checkpoint-<YYYY-MM-DD>.md"
    ```
    If the read fails or the content is missing, use the Fallback below.
-7. **Report and stop.** Once the checkpoint is written and verified,
-   return its path and a one-line summary.
+7. **Report and stop.** Return the path and a one-line summary.
 
 ## Checkpoint format
 
