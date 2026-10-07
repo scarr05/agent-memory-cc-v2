@@ -103,7 +103,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 ## Testing
 
 Semi-automated test suite in `tests/`:
-- **Tier 1 (scripted):** `bash tests/hook-validation.sh /path/to/project [expected-slug]` — validates hook outputs and captures metrics
+- **Tier 1 (scripted):** `HOOKS_DIR=./hooks bash tests/hook-validation.sh /path/to/project [expected-slug]` — validates hook outputs and captures metrics. `HOOKS_DIR` defaults to `~/.claude/hooks`, so without it you test the installed copy, not the repo code
 - **Tier 2-3 (manual):** Follow `tests/playbook.md` for session-level testing
 - **Results:** `tests/results/baseline-YYYY-MM-DD.md` (gitignored)
 
