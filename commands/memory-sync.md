@@ -210,7 +210,7 @@ Before writing, check the result with:
 
 ```bash
 # ponytail: any row over 400 chars means narrative crept in — rewrite that row, do not write the file
-# (no $0 here on purpose: slash-command argument substitution rewrites it)
+# (`length` with no field reference on purpose: slash-command argument substitution rewrites dollar-digit tokens)
 awk '/^\| / && length > 400 { print "ROW TOO LONG at line " NR; bad=1 } END { exit bad }' "<vault>/5 Agent Memory/project-index.md"
 ```
 
@@ -359,21 +359,32 @@ Build a mental map: what topics are covered, what decisions are logged, what lea
 
 ### Dream Phase 2: Gather Signal
 
-Find recent JSONL session transcripts for the current project:
+Find recent JSONL session transcripts for the current project. They sit directly in `~/.claude/projects/<encoded-cwd>/`, not in a `sessions/` subfolder. The hooks record this session's transcript in the staging breadcrumb, so its directory is the project's transcript folder:
 
 ```bash
-find ~/.claude/projects/ -path "*sessions/*.jsonl" -mtime -7 2>/dev/null | sort -r | head -20
+# Breadcrumb may hold a Windows path (backslashes): convert before dirname, or it returns "."
+DIR=$(dirname "$(tr -d '\r' < ~/.claude/memory-staging/<slug>/.transcript-path 2>/dev/null | tr '\\' '/')")
+# Skip headless `claude -p` runs (entrypoint sdk-cli): they are agent tests, not conversations
+find "$DIR" -maxdepth 1 -name '*.jsonl' -mtime -7 2>/dev/null \
+  | while IFS= read -r f; do grep -q '"entrypoint":"sdk-cli"' "$f" || printf '%s\n' "$f"; done \
+  | sort -r | head -20
 ```
+
+If `DIR` is `.` or doesn't exist, or the list is empty, say so in the report (`Transcripts scanned: 0 — <reason>`). Never report a silent zero.
 
 **Token-efficient scanning strategy — never read full transcript files:**
 
 1. **Grep first** — use the Grep tool to pattern match against JSONL files. This returns only matching lines with surrounding context, not entire files.
 
-2. **Extract content with jq** — for each matching line, extract just the human-readable content:
+2. **Extract content with jq** — pipe the matching lines through jq to get just the user's words:
 
 ```bash
-# Extract user message content from a matching JSONL line
-echo '<matching-line>' | jq -r 'select(.type == "human") | .message.content[] | select(.type == "text") | .text' 2>/dev/null
+# User entries are type "user"; content is a string or an array of blocks.
+# Drops tool results, meta entries and injected <command>/<system-reminder> text.
+grep -h -i -E '<signal pattern>' "<transcript>" \
+  | jq -r 'select(.type == "user" and (.isMeta | not)) | .message.content
+           | if type == "string" then . else (map(select(.type == "text") | .text) | join(" ")) end
+           | select(length > 0 and (startswith("<") | not))' 2>/dev/null
 ```
 
 3. **Read context only for high-confidence hits** — if a grep match looks promising, read 5-10 surrounding lines from the JSONL file to verify the context.
@@ -382,7 +393,7 @@ echo '<matching-line>' | jq -r 'select(.type == "human") | .message.content[] | 
 
 | Signal Type | Grep Pattern | Destination |
 |------------|-------------|-------------|
-| Corrections | `actually\|no,\|wrong\|incorrect\|not right\|stop doing\|I meant` | `learnings/corrections/` |
+| Corrections | `actually\|no,\|"no \|wrong\|incorrect\|not right\|stop doing\|I meant` (`"no ` catches a message that opens with "no") | `learnings/corrections/` |
 | Preferences | `I prefer\|always use\|never use\|from now on\|default to\|remember that` | `learnings/preferences/` |
 | Decisions | `let's go with\|I decided\|we're using\|the plan is\|switch to\|we agreed` | `_decisions.md` |
 | Recurring patterns | `again\|every time\|keep forgetting\|as usual\|same as before\|we always` | `learnings/workflow/` |
