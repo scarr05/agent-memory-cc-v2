@@ -136,7 +136,7 @@ source_agent: "claude-code"
 After writing the session note, if Obsidian CLI is available, set the status property:
 
 ```bash
-${OBSIDIAN_CLI_PATH:-obsidian} property:set name="status" value="complete" path="<session note path>" 2>/dev/null || true
+"${OBSIDIAN_CLI_PATH:-obsidian}" property:set name="status" value="complete" path="<session note path>" 2>/dev/null || true
 ```
 
 This is a convenience — the frontmatter already has the status, but the CLI property:set makes it queryable independently.

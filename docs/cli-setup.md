@@ -120,7 +120,7 @@ If the bare `obsidian` command does not work in your shell, set the full path (W
 export OBSIDIAN_CLI_PATH="/mnt/c/Users/<you>/AppData/Local/Programs/Obsidian/Obsidian.com"
 ```
 
-All hooks and subagents use `${OBSIDIAN_CLI_PATH:-obsidian}` and will pick this up.
+All hooks, commands and subagents invoke it as `"${OBSIDIAN_CLI_PATH:-obsidian}"` and will pick this up. Keep the quotes: the path can contain spaces.
 
 ## Verify
 

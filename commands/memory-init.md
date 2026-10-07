@@ -35,7 +35,7 @@ If $ARGUMENTS contains a project name/slug, use that. Otherwise, auto-detect.
 ## Phase 0: Check CLI Availability
 
 ```bash
-${OBSIDIAN_CLI_PATH:-obsidian} version 2>/dev/null
+"${OBSIDIAN_CLI_PATH:-obsidian}" version 2>/dev/null
 ```
 
 If the CLI is available, note the version. If not, warn:
