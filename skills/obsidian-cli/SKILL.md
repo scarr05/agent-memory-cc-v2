@@ -10,8 +10,11 @@ Command reference for Obsidian CLI 1.12+ as used by the agent memory system.
 ## CLI Binary
 
 ```bash
-${OBSIDIAN_CLI_PATH:-obsidian}
+"${OBSIDIAN_CLI_PATH:-obsidian}"
 ```
+
+Always quote it: the path can contain spaces (`/c/Program Files/Obsidian/Obsidian.com`),
+and unquoted it splits and fails with exit 127. The examples below write `obsidian` for short.
 
 On Windows, Obsidian registers `Obsidian.com` (terminal redirector) on PATH.
 If the bare command fails, check `docs/cli-setup.md` for platform-specific setup.
