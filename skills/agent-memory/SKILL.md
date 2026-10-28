@@ -75,9 +75,9 @@ Six hooks fire automatically. Know what they do so you can respond appropriately
 | Hook | Fires When | What It Does | Your Job |
 |------|-----------|--------------|----------|
 | **SessionStart** | Session begins (incl. `source=compact`) | Injects slug, a pending handoff, the unsynced-session flag, and init status via `additionalContext`. On `source=compact`, harvests the compaction summary into a handoff. | Process pending staging files. On a compaction restart, the handoff is injected automatically — review it and continue. Search Obsidian for prior context if the task is non-trivial. |
-| **PreToolUse** (Read) | Before a Read | Blocks redundant re-reads (read-once) via `permissionDecision`. | Nothing — it's transparent. |
+| **PreToolUse** (Read) | Before a Read | Flags redundant re-reads (read-once): `deny` with a reason (or a diff) in deny/diff mode, an `additionalContext` note in warn mode. | Use the content already in context. If you truly need the full file, repeat the Read once and it is allowed. |
 | **PreCompact** | Before compaction | Clears the read-once cache; checkpoint stubs are retired. Injects nothing — the handoff happens at the next SessionStart. | Nothing at compaction time; the post-compaction SessionStart drives the handoff. |
-| **Stop** | Each response | Nudges via `systemMessage` if the session is long (15/30 messages, 45+ min); checks the 24-hour dream timer. | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
+| **Stop** | Each response | Nudges via `systemMessage` if the session is long (15/30 messages, 45+ min). The 24-hour dream timer runs at SessionStart. | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
 | **SessionEnd** | Session ends | Writes `.unsynced` if a real-length session ended without `/memory-sync` (skips a deliberate `clear`). Side-effect only. | Nothing — the next SessionStart surfaces it. |
 | **UserPromptSubmit** | Each prompt | If the prompt touches a logged correction's topic, injects a one-line pointer via `additionalContext`. | Load the correction via memberberry before acting on that topic. |
 
@@ -86,7 +86,7 @@ Six hooks fire automatically. Know what they do so you can respond appropriately
 Hooks write to `~/.claude/memory-staging/<slug>/` because they can't call MCP. You bridge this to Obsidian:
 
 1. **Handoff scratch** (`handoff.md`) — written by `/handoff` (or harvested by a hook). SessionStart injects it automatically and renames it `handoff.consumed.md`; `/memory-sync` deletes both. You normally don't process it by hand.
-2. **Session meta** (`.session-meta`) — tracks message count and timing. Read-only for you; managed by hooks.
+2. **Session meta** (`.session-meta.<session_id>`, one per session) — tracks message count and timing. Read-only for you; managed by hooks.
 
 ---
 
@@ -300,7 +300,7 @@ The architecture optimises tokens at every layer:
 - **SessionStart** — CLI snapshot, ~200-300 tokens once (vs MCP dump)
 - **memberberry** — Haiku retrieval, main model gets ~200 token summary
 - **blackbox** — Haiku checkpoint, no main model context cost
-- **read-once** — blocks redundant source code reads, ~2000 tokens saved per prevented re-read
+- **read-once** — flags redundant source code reads; ~2000 tokens saved per re-read it blocks (deny or diff mode only)
 
 **Rules:**
 - Never call MCP vault search or note reads directly — delegate to memberberry

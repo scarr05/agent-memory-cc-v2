@@ -22,10 +22,10 @@ Six hooks fire on Claude Code lifecycle events:
 
 | Script | Event | Purpose | Budget |
 |--------|-------|---------|--------|
-| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag a pending handoff + unsynced sessions, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
+| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag a pending handoff + unsynced sessions, check the 24hr dream timer, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads | — |
 | `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired) | ≤100ms |
-| `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | ≤50ms |
+| `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min | ≤50ms |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` | ≤100ms |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic | ≤100ms |
 
@@ -57,7 +57,7 @@ Each hook emits the channel Claude Code actually reads for that event (corrected
 |------|---------|
 | SessionStart, UserPromptSubmit | `hookSpecificOutput.additionalContext` (a string Claude sees); plain stdout is a documented fallback via `MEMORY_HOOK_PLAINTEXT=1` |
 | Stop | `systemMessage` (shown to the user, not Claude) — the correct nudge channel |
-| PreToolUse (read-once) | `hookSpecificOutput.permissionDecision` (`allow` / `deny` / `ask`) |
+| PreToolUse (read-once) | `hookSpecificOutput.permissionDecision: deny` (reason shown to Claude) to block a re-read; `hookSpecificOutput.additionalContext` with no decision for a warn-mode advisory. Never `allow`: its reason reaches only the debug log, and it skips the permission prompt |
 | PreCompact | emits nothing — clears the read-once cache only; the post-compaction handoff comes from SessionStart with `source=compact` |
 | SessionEnd | side-effect only (writes `.unsynced`); receives `reason` on stdin, cannot inject |
 
@@ -96,6 +96,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - All bash scripts use `set -euo pipefail`
 - **Hooks must run on bash 3.2 + BSD userland (macOS) and bash 4+/GNU (Git Bash, WSL).** No `${var,,}`, `declare -A`, or `mapfile`; no `sed -i EXPR FILE`, `grep -oP`, or bare `sha1sum`. Portable idioms already in the repo: `tr '[:upper:]' '[:lower:]' | sed` for case folding, `sed` to a temp + `mv` for in-place edits, `sha1sum || shasum -a 1`. Note `bash -n` does **not** catch a bash-4 expansion — it is a runtime error, so always execute the hook, not just parse it. One codebase for both platforms: gate bash-4 builtins on `BASH_VERSINFO[0] -ge 4` with a bash-3.2 fallback branch rather than forking a per-OS copy. Any hook change must pass `tests/hook-validation.sh` on both a Windows Git Bash and a macOS machine before merge
 - Slug detection logic is duplicated across hook scripts (each script must be self-contained). `stop-memory.sh` uses a minimal `detect_slug_fast` variant for performance
+- Hooks key per-session state on `session_id` from the stdin JSON, not an env var (`CLAUDE_SESSION_ID` is not set in the hook env). Staging session meta is `.session-meta.<session_id>`; the unkeyed `.session-meta` is only the no-id fallback
 - Memory metadata in project CLAUDE.md files uses HTML comments (`<!-- memory:key=value -->`) for invisibility in rendered markdown
 - Obsidian notes must always include YAML frontmatter
 - British English spelling throughout (organisation, colour, behaviour)

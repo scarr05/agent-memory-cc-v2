@@ -138,6 +138,9 @@ detect_area() {
 STDIN_JSON=$(cat || true)
 SOURCE=$(printf '%s' "$STDIN_JSON" | jq -r '.source // "startup"' 2>/dev/null || echo "startup")
 TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
+SESSION_ID=$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/null || true)
+[[ -z "$SESSION_ID" ]] && SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9_-')
 
 _DETECTED_VIA=""
 SLUG=$(detect_slug)
@@ -171,11 +174,24 @@ fi
 # in the state file as an empty array for backward compatibility.
 PENDING_CHECKPOINTS=()
 
-# Capture the prior session's meta BEFORE the full path resets it. PRIOR_COUNT
-# feeds both the dream timer and the "previous session" hint further down.
+# Session meta is per session (.session-meta.<session_id>) so two sessions in the
+# same repo keep separate counters — a shared file let the second session's start
+# reset the first, which then never got flagged unsynced. The legacy unkeyed
+# .session-meta is used only when no session id is available.
+META_FILE="$PROJECT_DIR/.session-meta${SESSION_ID:+.$SESSION_ID}"
+
+# The prior session is the most recently active OTHER meta file (Stop rewrites its
+# own every turn). PRIOR_COUNT feeds both the dream timer and the "previous
+# session" hint further down.
 PRIOR_SESSION_INFO=""
-if [[ -f "$PROJECT_DIR/.session-meta" ]]; then
-    PRIOR_SESSION_INFO=$(cat "$PROJECT_DIR/.session-meta")
+PRIOR_META=""
+while IFS= read -r _m; do
+    case "$_m" in *.tmp*) continue ;; esac
+    [[ "$_m" == "$META_FILE" ]] && continue
+    PRIOR_META="$_m"; break
+done < <(ls -t "$PROJECT_DIR/.session-meta" "$PROJECT_DIR"/.session-meta.* 2>/dev/null || true)
+if [[ -n "$PRIOR_META" ]]; then
+    PRIOR_SESSION_INFO=$(cat "$PRIOR_META" 2>/dev/null || true)
 fi
 PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
 PRIOR_COUNT="${PRIOR_COUNT:-0}"
@@ -318,15 +334,21 @@ if [[ -n "$GIT_DIR_PATH" ]]; then
     fi
 fi
 
-# Reset session meta. session_start_epoch is the cross-hook contract the Stop
-# hook reads to compute session duration without a date -d parse (Task 6).
-cat > "$PROJECT_DIR/.session-meta" << EOF
+# Reset this session's meta. session_start_epoch is the cross-hook contract the
+# Stop hook reads to compute session duration without a date -d parse (Task 6).
+# A resume keeps the same session_id, so continue its meta (count, synced flag)
+# rather than resetting it. Only ever touches THIS session's file.
+if [[ "$SOURCE" != "resume" || ! -f "$META_FILE" ]]; then
+    cat > "$META_FILE" << EOF
 session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 session_start_epoch=$NOW_EPOCH
 message_count=0
 project_slug=$SLUG
 area=$AREA
 EOF
+fi
+# Prune metas of sessions idle for over a week (Stop rewrites the live ones).
+find "$PROJECT_DIR" -maxdepth 1 -name '.session-meta*' -mtime +7 -exec rm -f {} + 2>/dev/null || true
 
 # Check if memory-init has been run
 HAS_MEMORY_CONFIG="false"
@@ -336,7 +358,7 @@ fi
 
 # --- Build context injection ---
 CONTEXT="## Memory System Active\\n"
-CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`\\n\\n"
+CONTEXT+="Project: \`$SLUG\` | Area: \`${AREA:-unset}\`${SESSION_ID:+ | Session: \`$SESSION_ID\`}\\n\\n"
 
 if [[ "$HAS_MEMORY_CONFIG" == "false" ]]; then
     CONTEXT+="⚠ **No memory config.** Run \`/memory-init\` to set up. Using auto-detected slug \`$SLUG\`.\\n\\n"
@@ -530,7 +552,7 @@ fi
 # session of real length ended without /memory-sync — a deterministic signal
 # that supersedes the message-count heuristic below. Fall back to the heuristic
 # only when the flag is absent. /memory-sync owns removing .unsynced (PRIOR_COUNT
-# was captured before the meta reset above).
+# comes from the most recent other session's meta, captured above).
 if [[ -f "$PROJECT_DIR/.unsynced" ]]; then
     UNSYNCED_MSGS=$(sed -n 's/^messages=\([0-9]*\).*/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
     UNSYNCED_ENDED=$(sed -n 's/^ended=\(.*\)/\1/p' "$PROJECT_DIR/.unsynced" | head -1)

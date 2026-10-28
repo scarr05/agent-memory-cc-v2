@@ -10,6 +10,10 @@ EXPECTED_SLUG="${2:-}"
 # Defaults to the deployed hooks; override (HOOKS_DIR=./hooks) to test repo hooks
 # before deploying them to ~/.claude/hooks.
 HOOKS_DIR="${HOOKS_DIR:-$HOME/.claude/hooks}"
+# Hooks fall back to CLAUDE_CODE_SESSION_ID when stdin carries no session_id. A
+# run from inside Claude Code inherits it, which would key the '{}'-input cases
+# below to a per-session meta; unset it so those cases exercise the legacy path.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESULTS_DIR="$SCRIPT_DIR/results"
 TODAY=$(date +%Y-%m-%d)
@@ -689,6 +693,28 @@ else
         fail "reason=clear should not write .unsynced"
     fi
 
+    # Case 3b: two concurrent sessions keep separate metas. Starting B must not
+    # reset A, so A still gets flagged when it ends unsynced.
+    rm -f "$SE_FLAG"
+    SE_SS_HOOK="$HOOKS_DIR/session-start.sh"
+    SE_STOP_HOOK="$HOOKS_DIR/stop-memory.sh"
+    if [[ -f "$SE_SS_HOOK" && -f "$SE_STOP_HOOK" ]]; then
+        rm -f "$SE_STAGING/.session-meta.hookval-a" "$SE_STAGING/.session-meta.hookval-b"
+        echo '{"source":"startup","session_id":"hookval-a"}' | OBSIDIAN_CLI_PATH=/nonexistent bash "$SE_SS_HOOK" >/dev/null 2>&1 || true
+        for _i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            echo '{"session_id":"hookval-a"}' | bash "$SE_STOP_HOOK" >/dev/null 2>&1 || true
+        done
+        echo '{"source":"startup","session_id":"hookval-b"}' | OBSIDIAN_CLI_PATH=/nonexistent bash "$SE_SS_HOOK" >/dev/null 2>&1 || true
+        echo '{"session_id":"hookval-b"}' | bash "$SE_STOP_HOOK" >/dev/null 2>&1 || true
+        echo '{"reason":"other","session_id":"hookval-a"}' | bash "$SE_HOOK" 2>/dev/null || true
+        if [[ -f "$SE_FLAG" ]] && grep -q '^messages=12' "$SE_FLAG"; then
+            pass "Concurrent sessions: B's start does not reset A (A flagged with 12 msgs)"
+        else
+            fail "Concurrent sessions: expected A flagged with messages=12, got: $(cat "$SE_FLAG" 2>/dev/null | head -c 200)"
+        fi
+        rm -f "$SE_STAGING/.session-meta.hookval-a" "$SE_STAGING/.session-meta.hookval-b" "$SE_FLAG"
+    fi
+
     # Case 4: below threshold (count=9) -> no flag.
     rm -f "$SE_FLAG"
     se_seed_meta 9
@@ -780,6 +806,25 @@ else
         fail "Corrections hit: expected additionalContext mentioning the title, got: $(echo "$UPS_HIT" | head -c 200)"
     fi
 
+    # Word-based match: punctuation, apostrophes, case and filler words must not
+    # defeat it (the old exact-phrase match missed all of these).
+    printf '%s\n' "dont-use-sed-i-on-macos|dont use sed i on macos" > "$UPS_INDEX"
+    for UPS_P in "dont use sed i on macos" "don't use sed -i on macOS please" "why does SED break on macos?"; do
+        UPS_OUT=$(jq -n --arg p "$UPS_P" '{prompt:$p}' | bash "$UPS_HOOK" 2>/dev/null || true)
+        if echo "$UPS_OUT" | grep -q 'dont-use-sed-i-on-macos'; then
+            pass "Corrections word match: '$UPS_P'"
+        else
+            fail "Corrections word match missed: '$UPS_P' -> $(echo "$UPS_OUT" | head -c 120)"
+        fi
+    done
+    UPS_PART=$(echo '{"prompt":"fix the macos build"}' | bash "$UPS_HOOK" 2>/dev/null || true)
+    if [[ -z "$UPS_PART" ]]; then
+        pass "Corrections word match: partial topic (macos only) does not fire"
+    else
+        fail "Corrections word match: partial topic fired: $(echo "$UPS_PART" | head -c 120)"
+    fi
+    printf '%s\n' "Widget Caching|widget caching" > "$UPS_INDEX"
+
     # No match: unrelated prompt -> no output.
     UPS_MISS=$(echo '{"prompt":"what is the weather today?"}' | bash "$UPS_HOOK" 2>/dev/null || true)
     if [[ -z "$UPS_MISS" ]]; then
@@ -830,18 +875,34 @@ else
     # file). Use an absolute path so the hook's existence check resolves
     # regardless of the hook's working directory.
     RO_TARGET="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
-    RO_INPUT="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$RO_TARGET\"}}"
-    # Fixed session id so both reads share one cache dir
-    export CLAUDE_SESSION_ID="hookval-readonce-test"
+    # session_id rides on stdin exactly as Claude Code sends it. No env var: the
+    # real hook env has no CLAUDE_SESSION_ID, and exporting one here is what let
+    # the old $$-fallback bug pass this test.
+    RO_SID="hookval-readonce-test"
+    RO_INPUT="{\"session_id\":\"$RO_SID\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$RO_TARGET\"}}"
 
-    # warn mode (default): first read primes cache, second read warns with allow
+    # warn mode (default): second read gets additionalContext and NO decision
+    # (an "allow" reason never reaches Claude, and allow would skip the prompt).
     RO_FIRST=$(echo "$RO_INPUT" | READ_ONCE_MODE=warn bash "$RO_HOOK" 2>/dev/null || true)
     RO_SECOND=$(echo "$RO_INPUT" | READ_ONCE_MODE=warn bash "$RO_HOOK" 2>/dev/null || true)
     RO_WARN_DECISION=$(echo "$RO_SECOND" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true)
-    if [[ "$RO_WARN_DECISION" == "allow" ]]; then
-        pass "Read-once warn: second read -> permissionDecision allow"
+    RO_WARN_CTX=$(echo "$RO_SECOND" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null || true)
+    if [[ -z "$RO_WARN_DECISION" ]] && [[ "$RO_WARN_CTX" == *"already read"* ]]; then
+        pass "Read-once warn: second read -> additionalContext, no permissionDecision"
     else
-        fail "Read-once warn: expected allow, got '$RO_WARN_DECISION' ($(echo "$RO_SECOND" | head -c 200))"
+        fail "Read-once warn: expected additionalContext and no decision ($(echo "$RO_SECOND" | head -c 200))"
+    fi
+
+    # No session_id anywhere: no dedup and no per-call cache dir littering.
+    rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
+    RO_NOSID="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$RO_TARGET\"}}"
+    echo "$RO_NOSID" | bash "$RO_HOOK" >/dev/null 2>&1 || true
+    RO_NOSID_OUT=$(echo "$RO_NOSID" | bash "$RO_HOOK" 2>/dev/null || true)
+    RO_NOSID_DIRS=$(find "$RO_CACHE_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | tr -d ' ' || true)
+    if [[ -z "$RO_NOSID_OUT" ]] && [[ "$RO_NOSID_DIRS" == "0" ]]; then
+        pass "Read-once without session_id: no output, no cache dirs"
+    else
+        fail "Read-once without session_id: out='$(echo "$RO_NOSID_OUT" | head -c 100)' dirs=$RO_NOSID_DIRS"
     fi
 
     # deny mode: reset cache, prime, second read denies
@@ -854,10 +915,47 @@ else
     else
         fail "Read-once deny: expected deny, got '$RO_DENY_DECISION' ($(echo "$RO_D_SECOND" | head -c 200))"
     fi
+    # Escape hatch: the Read straight after a deny goes through (no Edit deadlock),
+    # and the one after that is denied again.
+    RO_D_THIRD=$(echo "$RO_INPUT" | READ_ONCE_MODE=deny bash "$RO_HOOK" 2>/dev/null || true)
+    RO_D_FOURTH=$(echo "$RO_INPUT" | READ_ONCE_MODE=deny bash "$RO_HOOK" 2>/dev/null || true)
+    if [[ -z "$RO_D_THIRD" ]] && [[ "$(echo "$RO_D_FOURTH" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+        pass "Read-once deny: retry after a deny is allowed once"
+    else
+        fail "Read-once deny retry: third='$(echo "$RO_D_THIRD" | head -c 100)' fourth='$(echo "$RO_D_FOURTH" | head -c 100)'"
+    fi
 
-    # Clean cache after and unset the test session id
+    # PreCompact clears exactly this session's cache, keyed on stdin session_id.
+    if [[ -f "$PC_HOOK" ]]; then
+        mkdir -p "$RO_CACHE_DIR/other-session"
+        echo "{\"session_id\":\"$RO_SID\"}" | bash "$PC_HOOK" >/dev/null 2>&1 || true
+        if [[ ! -d "$RO_CACHE_DIR/$RO_SID" ]] && [[ -d "$RO_CACHE_DIR/other-session" ]]; then
+            pass "PreCompact clears this session's read-once cache only"
+        else
+            fail "PreCompact scoped clear: own dir present=$([[ -d "$RO_CACHE_DIR/$RO_SID" ]] && echo y || echo n), other present=$([[ -d "$RO_CACHE_DIR/other-session" ]] && echo y || echo n)"
+        fi
+    fi
+
+    # Diff mode: a changed file is denied with the diff as the reason (any mode).
     rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
-    unset CLAUDE_SESSION_ID
+    RO_DIFF_FILE="$(mktemp)"
+    printf 'line one\nline two\n' > "$RO_DIFF_FILE"
+    RO_DIFF_INPUT="{\"session_id\":\"$RO_SID\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$RO_DIFF_FILE\"}}"
+    echo "$RO_DIFF_INPUT" | READ_ONCE_DIFF=1 bash "$RO_HOOK" >/dev/null 2>&1 || true
+    printf 'line one\nline 2 changed\n' > "$RO_DIFF_FILE"
+    touch -t 203001010000 "$RO_DIFF_FILE"   # force an mtime change on 1s-granularity filesystems
+    RO_DIFF_OUT=$(echo "$RO_DIFF_INPUT" | READ_ONCE_DIFF=1 bash "$RO_HOOK" 2>/dev/null || true)
+    RO_DIFF_DEC=$(echo "$RO_DIFF_OUT" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null || true)
+    RO_DIFF_WHY=$(echo "$RO_DIFF_OUT" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null || true)
+    if [[ "$RO_DIFF_DEC" == "deny" ]] && [[ "$RO_DIFF_WHY" == *"line 2 changed"* ]]; then
+        pass "Read-once diff: changed file denied with the diff in the reason"
+    else
+        fail "Read-once diff: expected deny + diff, got $(echo "$RO_DIFF_OUT" | head -c 200)"
+    fi
+    rm -f "$RO_DIFF_FILE"
+
+    # Clean cache after
+    rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
 fi
 echo ""
 

@@ -224,7 +224,20 @@ Check `~/.claude/memory-staging/<slug>/` for:
 
 ```bash
 rm -f ~/.claude/memory-staging/<slug>/handoff.md ~/.claude/memory-staging/<slug>/handoff.consumed.md
-META=~/.claude/memory-staging/<slug>/.session-meta
+
+# Meta is per session: .session-meta.<session_id>. Use the session id from the
+# SessionStart context ("Session: `<id>`"), else CLAUDE_CODE_SESSION_ID. Only fall
+# back to the newest meta when neither is known; with two live sessions in this repo
+# that guess can mark the wrong one synced, so say so if you had to use it.
+DIR=~/.claude/memory-staging/<slug>
+SID="<session id from the SessionStart context, or empty>"
+[[ -z "$SID" ]] && SID="${CLAUDE_CODE_SESSION_ID:-}"
+if [[ -n "$SID" && -f "$DIR/.session-meta.$SID" ]]; then
+    META="$DIR/.session-meta.$SID"
+else
+    META=$(ls -t "$DIR"/.session-meta.* "$DIR/.session-meta" 2>/dev/null | grep -v '\.tmp' | head -1)
+    echo "WARNING: session id unknown, guessed newest meta: $META"
+fi
 
 # `sed -i EXPR FILE` is GNU-only — BSD/macOS sed reads EXPR as the backup suffix
 # and errors. Write to a temp and mv; works on both userlands.
@@ -243,7 +256,7 @@ fi
 rm -f ~/.claude/memory-staging/<slug>/.unsynced
 ```
 
-A fresh SessionStart resets `.session-meta`, so `synced=true` applies only to the current session.
+Each session has its own meta file and a fresh SessionStart creates a new one, so `synced=true` applies only to the current session.
 
 ### Step 7: Confirm
 
@@ -333,8 +346,11 @@ Read current state from both tiers to build a baseline of what's already capture
 **Tier 2 — auto-memory:**
 
 ```bash
-# Find the auto-memory directory for this project
-ls ~/.claude/projects/*/memory/MEMORY.md 2>/dev/null
+# Auto-memory for THIS project only. Claude Code names the projects dir after the
+# OS-native cwd with / \ : replaced by - (same encoding as /handoff Step 1). Do not
+# glob ~/.claude/projects/*: that pulls every other project's MEMORY.md into scope.
+ENCODED=$(printf '%s' "$(cygpath -w "$PWD" 2>/dev/null || printf '%s' "$PWD")" | sed 's#[/\\:]#-#g')
+ls "$HOME/.claude/projects/$ENCODED/memory/MEMORY.md" 2>/dev/null
 ```
 
 If found, read `MEMORY.md` and note existing entries.

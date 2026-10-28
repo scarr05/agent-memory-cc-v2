@@ -41,7 +41,11 @@ fi
 [[ -z "$SLUG" ]] && SLUG="unknown"
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
-META_FILE="$PROJECT_DIR/.session-meta"
+# Per-session meta, keyed the same way as session-start.sh / stop-memory.sh.
+SESSION_ID=$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/null || true)
+[[ -z "$SESSION_ID" ]] && SESSION_ID="${CLAUDE_CODE_SESSION_ID:-}"
+SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+META_FILE="$PROJECT_DIR/.session-meta${SESSION_ID:+.$SESSION_ID}"
 
 # Bare /clear with no armed handoff: deterministically harvest a clear-fallback
 # so the thread is never silently lost. Never clobber an active manual handoff.

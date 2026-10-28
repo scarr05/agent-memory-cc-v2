@@ -32,7 +32,20 @@ SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
 [[ -z "$SLUG" ]] && SLUG="unknown"
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
-META_FILE="$PROJECT_DIR/.session-meta"
+
+# Per-session meta: two sessions in one repo must not share a counter (starting
+# the second used to reset the first, which then never got flagged unsynced).
+# session_id is on stdin; extract it with a bash regex — no jq on the hot path.
+# Legacy unkeyed .session-meta only when no id is available at all.
+STDIN_JSON=$(cat || true)
+SID_RE='"session_id"[[:space:]]*:[[:space:]]*"([A-Za-z0-9_-]+)"'
+SESSION_ID=""
+if [[ "$STDIN_JSON" =~ $SID_RE ]]; then
+    SESSION_ID="${BASH_REMATCH[1]}"
+else
+    SESSION_ID=$(printf '%s' "${CLAUDE_CODE_SESSION_ID:-}" | tr -cd 'A-Za-z0-9_-')
+fi
+META_FILE="$PROJECT_DIR/.session-meta${SESSION_ID:+.$SESSION_ID}"
 
 [[ -d "$PROJECT_DIR" ]] || mkdir -p "$PROJECT_DIR"
 
@@ -101,21 +114,20 @@ else
 fi
 
 # --- Handoff token nudge (off the hot path) ---
-# Everything below — sourcing the lib, reading stdin, the jq parse, the breadcrumb
+# Everything below — sourcing the lib, the jq parse of stdin, the breadcrumb
 # refresh, and the token scan — is gated behind a cheap, jq-free message-count read
 # plus the once-per-session flag. Turns below the floor (the common short turn) and
-# turns after the nudge has already fired pay ZERO extra cost: no source, no cat, no jq.
+# turns after the nudge has already fired pay ZERO extra cost: no source, no jq.
 MSG_NOW=$(sed -n 's/^message_count=\([0-9]*\).*/\1/p' "$META_FILE" | head -1); MSG_NOW="${MSG_NOW:-0}"
 if [[ "$MSG_NOW" -ge 8 ]] && ! grep -q '^handoff_nudge_sent=true' "$META_FILE" 2>/dev/null; then
     # Lazily source the library (function defs only; its CLI dispatcher is guarded by
-    # BASH_SOURCE==$0) and read the Stop stdin payload — only now is the cost worth it.
+    # BASH_SOURCE==$0) and parse the Stop stdin payload — only now is the cost worth it.
     LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     HANDOFF_LIB=0
     if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
         # shellcheck source=/dev/null
         source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
     fi
-    STDIN_JSON=$(cat || true)
     TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
     # Refresh the /handoff transcript breadcrumb. The path is stable within a session;

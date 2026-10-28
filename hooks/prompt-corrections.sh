@@ -43,20 +43,52 @@ PROMPT=$(printf '%s' "$RAW" | jq -r '.prompt // empty' 2>/dev/null || true)
 # If the prompt field can't be parsed, match against the raw payload rather than
 # silently miss a correction (fail toward surfacing).
 [[ -z "$PROMPT" ]] && PROMPT="$RAW"
-if (( BASH_VERSINFO[0] >= 4 )); then PROMPT_LC="${PROMPT,,}"; else PROMPT_LC=$(printf '%s' "$PROMPT" | tr '[:upper:]' '[:lower:]'); fi
 
-# Index lines: "<title>|<key>" where <key> is the lowercased, space-separated
-# topic (built by session-start.sh, always newline-terminated via awk's ORS).
-# Pure-bash substring match — no per-line spawn. "$key" is quoted inside the
-# case pattern, so its contents are literal (no glob injection from a crafted
-# vault filename).
-HITS=""
-while IFS='|' read -r name key; do
-    [[ -z "$key" ]] && continue
-    case "$PROMPT_LC" in
-        *"$key"*) HITS="${HITS:+$HITS, }$name" ;;
-    esac
-done < "$INDEX"
+# Index lines: "<title>|<key>" where <key> is the correction's topic, derived from
+# its vault filename by session-start.sh. Matching is word-based, not an exact
+# phrase: both sides are lowercased, apostrophes dropped (don't -> dont) and every
+# other non-alphanumeric run turned into a space (sed -i -> sed i), then a
+# correction fires when every significant word of its key appears as a whole word
+# in the prompt, in any order (modulo a trailing s). "Significant" drops filler words and one-letter
+# tokens, so "dont-use-sed-i-on-macos" needs {sed, macos}. A key made only of
+# filler falls back to all its words. One awk pass, no per-line spawn; the prompt
+# goes in via ENVIRON so awk does not interpret backslash escapes in it.
+HITS=$(RO_PROMPT="$PROMPT" LC_ALL=C awk -F'|' '
+    function norm(t) {
+        t = tolower(t)
+        gsub(/\047|\342\200\231/, "", t)          # ASCII and curly apostrophes
+        gsub(/[^a-z0-9]+/, " ", t)
+        return t
+    }
+    # Crude stem: drop one trailing s so plurals and possessives match (paths -> path,
+    # CLI-apostrophe-s -> clis -> cli). Applied to both sides of the comparison.
+    function stem(w) { return (length(w) > 3 && w ~ /s$/) ? substr(w, 1, length(w) - 1) : w }
+    function seen(w) { return (w in have) || (stem(w) in have) }
+    BEGIN {
+        n = split("a an and are as at be by do does dont for from in into is it its never no not of on or please should the this to use using via when with without always avoid", sw, " ")
+        for (i = 1; i <= n; i++) stop[sw[i]] = 1
+        np = split(norm(ENVIRON["RO_PROMPT"]), pw, " ")
+        for (i = 1; i <= np; i++) { have[pw[i]] = 1; have[stem(pw[i])] = 1 }
+        out = ""
+    }
+    $2 == "" { next }
+    {
+        nk = split(norm($2), kw, " ")
+        if (nk == 0) next
+        sig = 0; ok = 1
+        for (i = 1; i <= nk; i++) {
+            if (kw[i] in stop || length(kw[i]) < 2) continue
+            sig++
+            if (!seen(kw[i])) { ok = 0; break }
+        }
+        if (sig == 0) {
+            ok = 1
+            for (i = 1; i <= nk; i++) if (!seen(kw[i])) { ok = 0; break }
+        }
+        if (ok) out = (out == "") ? $1 : out ", " $1
+    }
+    END { print out }
+' "$INDEX" 2>/dev/null || true)
 
 [[ -z "$HITS" ]] && exit 0
 

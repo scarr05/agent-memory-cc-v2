@@ -5,7 +5,7 @@
 #
 # Hook intercepts Read tool calls and checks a session cache.
 # First read: allowed, cached. Re-read unchanged: blocked/warned.
-# Re-read changed + diff enabled: shows diff only.
+# Re-read changed + diff enabled: denied with the diff as the reason.
 
 set -euo pipefail
 
@@ -19,26 +19,18 @@ DISABLED="${READ_ONCE_DISABLED:-0}"
 # Exit immediately if disabled
 [[ "$DISABLED" == "1" ]] && exit 0
 
-# Dependency check — jq is required for JSON parsing and output
+# Dependency check — jq is required for JSON parsing and output. systemMessage
+# reaches the user; an "allow" reason would only reach the debug log.
 if ! command -v jq &>/dev/null; then
-    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-once: jq is not installed. Install jq to enable redundant read prevention."}}'
+    echo '{"systemMessage":"read-once: jq is not installed. Install jq to enable redundant read prevention."}'
     exit 0
 fi
 
 # Validate numeric config
 if ! [[ "$TTL" =~ ^[0-9]+$ ]] || ! [[ "$DIFF_MAX" =~ ^[0-9]+$ ]]; then
-    echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-once: TTL or DIFF_MAX is not a valid number. Check READ_ONCE_TTL and READ_ONCE_DIFF_MAX."}}'
+    echo '{"systemMessage":"read-once: TTL or DIFF_MAX is not a valid number. Check READ_ONCE_TTL and READ_ONCE_DIFF_MAX."}'
     exit 0
 fi
-
-# --- Cache setup ---
-CACHE_DIR="$HOME/.claude/read-once/cache"
-SESSION_ID=$(echo "${CLAUDE_SESSION_ID:-$$}" | tr -cd 'A-Za-z0-9_-')
-SESSION_CACHE="$CACHE_DIR/$SESSION_ID"
-mkdir -p "$SESSION_CACHE"
-
-# Auto-clean old session caches (>24h)
-find "$CACHE_DIR" -maxdepth 1 -mindepth 1 -type d -mmin +1440 -exec rm -rf {} \; 2>/dev/null || true
 
 # --- Parse input ---
 INPUT=$(cat)
@@ -56,6 +48,22 @@ HAS_LIMIT=$(echo "$INPUT" | jq -r '.tool_input.limit // empty' 2>/dev/null || tr
 if [[ -n "$HAS_OFFSET" ]] || [[ -n "$HAS_LIMIT" ]]; then
     exit 0
 fi
+
+# --- Cache setup ---
+# session_id arrives on stdin (documented common input field). CLAUDE_SESSION_ID is
+# NOT set in the hook env; CLAUDE_CODE_SESSION_ID is kept as a fallback. With no id
+# there is nothing stable to key on — a per-call $$ dir would never dedupe — so
+# skip dedup entirely rather than litter the cache.
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
+[[ -z "$SESSION_ID" ]] && SESSION_ID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+[[ -z "$SESSION_ID" ]] && exit 0
+CACHE_DIR="$HOME/.claude/read-once/cache"
+SESSION_CACHE="$CACHE_DIR/$SESSION_ID"
+mkdir -p "$SESSION_CACHE"
+
+# Auto-clean old session caches (>24h)
+find "$CACHE_DIR" -maxdepth 1 -mindepth 1 -type d -mmin +1440 -exec rm -rf {} \; 2>/dev/null || true
 
 # --- Cache key ---
 # sha1 of the path: fixed 40-char filename, safe for non-ASCII and >NAME_MAX
@@ -89,7 +97,24 @@ if [[ -z "$CURRENT_MTIME" ]]; then
 fi
 
 # --- Check cache ---
+# Output channels (verified against a probe hook): a "deny" reason is shown to
+# Claude; an "allow" reason only reaches the debug log, and "allow" also skips the
+# normal permission prompt. So warn mode emits additionalContext with NO decision,
+# and only a deny (unchanged in deny mode, or a small diff) actually saves tokens.
+#
+# Escape hatch: every deny leaves a .denied marker, and the next Read of the same
+# file is let through in full. If Claude genuinely needs the content (e.g. Edit
+# reports the file changed since it was read), re-issuing the Read cannot deadlock.
 if [[ -f "$CACHE_FILE" ]]; then
+    if [[ -f "$CACHE_FILE.denied" ]]; then
+        rm -f "$CACHE_FILE.denied"
+        write_cache "$CURRENT_MTIME" "$(date +%s)"
+        if [[ "$DIFF_ENABLED" == "1" ]]; then
+            cp "$FILE_PATH" "$CACHE_FILE.content" 2>/dev/null || true
+        fi
+        exit 0
+    fi
+
     CACHED_MTIME=$(sed -n '1p' "$CACHE_FILE")
     CACHED_TIME=$(sed -n '2p' "$CACHE_FILE")
     NOW=$(date +%s)
@@ -112,30 +137,40 @@ if [[ -f "$CACHE_FILE" ]]; then
         MINS_AGO=$((ELAPSED / 60))
 
         if [[ "$MODE" == "deny" ]]; then
+            : > "$CACHE_FILE.denied"
             jq -n --arg path "$FILE_PATH" --argjson mins "$MINS_AGO" \
-                '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ("read-once: already in context (read " + ($mins | tostring) + "m ago, unchanged). File: " + $path)}}'
+                '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ("read-once: already in context (read " + ($mins | tostring) + "m ago, unchanged). If you need the full content again, repeat the Read and it will be allowed. File: " + $path)}}'
             exit 0
         else
             jq -n --arg path "$FILE_PATH" --argjson mins "$MINS_AGO" \
-                '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: ("read-once: this file was already read " + ($mins | tostring) + "m ago and hasn'\''t changed. It should still be in your context. File: " + $path)}}'
+                '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: ("read-once: this file was already read " + ($mins | tostring) + "m ago and has not changed since, so its content is already in context. File: " + $path)}}'
             exit 0
         fi
     fi
 
-    # File changed since last read
+    # File changed since last read. A diff only saves tokens if the full read is
+    # denied, so READ_ONCE_DIFF=1 denies with the diff as the reason in either mode.
     if [[ "$DIFF_ENABLED" == "1" ]]; then
         # Check that cached content exists before attempting diff
         if [[ -f "$CACHE_FILE.content" ]]; then
             DIFF_OUTPUT=$(diff "$CACHE_FILE.content" "$FILE_PATH" 2>/dev/null || true)
-            DIFF_LINES=$(echo "$DIFF_OUTPUT" | wc -l)
+            DIFF_LINES=$(printf '%s' "$DIFF_OUTPUT" | grep -c '' || true)
 
-            if [[ "$DIFF_LINES" -gt 0 ]] && [[ "$DIFF_LINES" -le "$DIFF_MAX" ]]; then
+            if [[ -z "$DIFF_OUTPUT" ]]; then
+                # mtime moved but the bytes did not (touch, formatter no-op).
+                write_cache "$CURRENT_MTIME" "$(date +%s)"
+                : > "$CACHE_FILE.denied"
+                jq -n --arg path "$FILE_PATH" \
+                    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ("read-once: file was touched but its content is identical to your last read, so it is already in context. If you need it again, repeat the Read and it will be allowed. File: " + $path)}}'
+                exit 0
+            fi
+            if [[ "$DIFF_LINES" -le "$DIFF_MAX" ]]; then
                 write_cache "$CURRENT_MTIME" "$(date +%s)"
                 cp "$FILE_PATH" "$CACHE_FILE.content" 2>/dev/null || true
+                : > "$CACHE_FILE.denied"
 
-                TRIMMED_DIFF=$(echo "$DIFF_OUTPUT" | head -"$DIFF_MAX")
-                jq -n --arg lines "$DIFF_LINES" --arg diff "$TRIMMED_DIFF" \
-                    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: ("read-once: file changed since last read (" + $lines + " lines differ). Diff:\n" + $diff)}}'
+                jq -n --arg lines "$DIFF_LINES" --arg diff "$DIFF_OUTPUT" --arg path "$FILE_PATH" \
+                    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ("read-once: file changed since you last read it (" + $lines + " diff lines); the diff below replaces a full re-read. If you need the full content, repeat the Read and it will be allowed. File: " + $path + "\nDiff (old -> new):\n" + $diff)}}'
                 exit 0
             fi
         fi

@@ -17,10 +17,10 @@ Two ways to install: as a Claude Code **plugin** (one command registers all six 
 
 | Hook | Event | Does |
 |------|-------|------|
-| `session-start.sh` | SessionStart | Detect slug, inject the prior-context pointer, flag a pending handoff and unsynced sessions, run the post-compaction handoff |
+| `session-start.sh` | SessionStart | Detect slug, inject the prior-context pointer, flag a pending handoff and unsynced sessions, check the 24-hour dream timer, run the post-compaction handoff |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads |
 | `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired — injects nothing) |
-| `stop-memory.sh` | Stop | Track message count, nudge for `/memory-sync`, check the 24-hour dream timer |
+| `stop-memory.sh` | Stop | Track message count, nudge for `/memory-sync` |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic |
 

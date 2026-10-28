@@ -35,7 +35,7 @@ Agent definitions live in `agents/` and are deployed to `~/.claude/agents/`. In 
 
 ### read-once Hook
 
-A vendored PreToolUse hook that prevents redundant file re-reads within a session. Saves ~2,000 tokens per blocked re-read.
+A vendored PreToolUse hook that catches redundant file re-reads within a session. Only a blocked re-read saves tokens (~2,000 each), so savings need `READ_ONCE_MODE=deny` and/or `READ_ONCE_DIFF=1`; the default `warn` mode only tells Claude the file is already in context.
 
 Vendored from [Boucle framework](https://github.com/Bande-a-Bonnot/Boucle-framework/tree/main/tools/read-once).
 
@@ -53,7 +53,7 @@ Configuration via environment variables — see `hooks/read-once/README.md`.
 │   ├── hooks.json              # Plugin hook registration (${CLAUDE_PLUGIN_ROOT} paths)
 │   ├── session-start.sh        # SessionStart — slug, vault state, context injection, compaction handoff
 │   ├── pre-compact.sh          # PreCompact — clear read-once cache (checkpoint stubs retired)
-│   ├── stop-memory.sh          # Stop — track message count, nudge for /memory-sync, dream timer
+│   ├── stop-memory.sh          # Stop — track message count, nudge for /memory-sync
 │   ├── session-end.sh          # SessionEnd — flag a session that ended without /memory-sync
 │   ├── prompt-corrections.sh   # UserPromptSubmit — surface a logged correction in context
 │   └── read-once/
@@ -127,8 +127,8 @@ See [docs/setup-guide-v4.md](docs/setup-guide-v4.md) for full installation steps
 1. **SessionStart hook** fires when Claude Code opens a project. It detects the project slug (from CLAUDE.md metadata, git remote, manifest files, or directory name), checks for a pending handoff, flags any prior session that ended without a sync, and injects prior context via `hookSpecificOutput.additionalContext`. When the session restarts after compaction (`source=compact`) it harvests the compaction summary into a handoff and injects it.
 2. **Claude searches Obsidian** for prior session notes and learnings relevant to the current project, picking up where previous sessions left off.
 3. **UserPromptSubmit hook** runs on each prompt. If the prompt touches a topic with a logged correction, it surfaces a one-line pointer so the correction is loaded before Claude acts.
-4. **You work normally.** The system stays out of the way during regular development. The read-once PreToolUse hook quietly blocks redundant file re-reads.
-5. **Stop hook** runs after each response, incrementing a message counter. At 15 and 30 messages (or after 45+ minutes), it nudges you to run `/memory-sync`. It also checks a 24-hour dream timer and sets a `.dream-pending` flag when consolidation is due.
+4. **You work normally.** The system stays out of the way during regular development. The read-once PreToolUse hook flags redundant file re-reads (and blocks them in `deny` mode).
+5. **Stop hook** runs after each response, incrementing a message counter. At 15 and 30 messages (or after 45+ minutes), it nudges you to run `/memory-sync`. (The 24-hour dream timer runs in the SessionStart hook, which sets the `.dream-pending` flag and the nudge.)
 6. **PreCompact hook** fires before context compaction. It only clears the read-once cache and injects nothing — checkpoint stubs are retired. Continuity comes from the handoff workflow: the post-compaction SessionStart (`source=compact`) harvests Claude Code's own compaction summary into a handoff scratch file and injects it, so the trimmed session can pick up where it left off. The preferred path is `/handoff` → `/clear` before compaction ever fires.
 7. **SessionEnd hook** fires when the session ends. If a real-length session ended without `/memory-sync` (and wasn't a deliberate `/clear`), it writes an `.unsynced` flag that the next SessionStart surfaces.
 8. **`/memory-sync`** writes a structured session note to the Obsidian vault, proposes learnings, appends decisions to the project's `_decisions.md` log, marks the session synced, and cleans up staging files.
@@ -162,7 +162,7 @@ Deep consolidation that mines recent session transcripts (JSONL files) for decis
 - Stale sessions (90+ days) for archival
 - Auto-memory ingest from Claude Code's built-in memory
 
-The stop hook checks a 24-hour timer and the session-start hook nudges when dream consolidation is due. `--ingest` and `--tidy` are now aliases for dream phases 3 and 4.
+The session-start hook checks a 24-hour timer and nudges when dream consolidation is due. `--ingest` and `--tidy` are now aliases for dream phases 3 and 4.
 
 ## Troubleshooting
 

@@ -67,9 +67,11 @@ Fires every time Claude Code starts. Deterministic context injection.
 1. **Detect project slug** — reads `.claude/CLAUDE.md` for the `memory:project-slug` comment. If missing, falls back through the detection priority chain. The slug is charset-clamped before it touches any path.
 2. **Validate Obsidian structure** — checks if `5 Agent Memory/sessions/by-project/<slug>/` exists (via file check if vault is locally synced).
 3. **Inject context pointer** — outputs `hookSpecificOutput.additionalContext` telling Claude where to find memory and what slug to use (or plain stdout when `MEMORY_HOOK_PLAINTEXT=1`).
-4. **Flag pending work** — surfaces a pending handoff (`handoff.md`) and the `.unsynced` marker SessionEnd leaves when a prior session was never synced.
-5. **Flag if uninitialised** — if no slug found, context tells Claude to suggest running `/memory-init`.
-6. **Handle the compaction restart** — when `source=compact`, harvests the compaction summary into a handoff scratch file, preserving the session counter and start time across compaction. (No stub-filling or blackbox direction — the handoff is injected directly.)
+4. **Check the dream timer** — sets `.dream-pending` (and the 💤 nudge) when the last dream was over 24 hours ago, or on first use once a prior session showed real activity. This used to run in the Stop hook; it moved here off the per-response hot path.
+5. **Track the session** — writes `.session-meta.<session_id>` (one per session, so concurrent sessions in one repo keep separate counters; a resume continues its own file) and prunes metas idle for over a week.
+6. **Flag pending work** — surfaces a pending handoff (`handoff.md`) and the `.unsynced` marker SessionEnd leaves when a prior session was never synced.
+7. **Flag if uninitialised** — if no slug found, context tells Claude to suggest running `/memory-init`.
+8. **Handle the compaction restart** — when `source=compact`, harvests the compaction summary into a handoff scratch file, preserving the session counter and start time across compaction. (No stub-filling or blackbox direction — the handoff is injected directly.)
 
 ### SessionStart vs UserPromptSubmit
 
@@ -85,7 +87,7 @@ Fires before context compaction. Checkpoint stubs are retired — the hook now d
 
 ### What It Does
 
-1. **Clear the read-once cache** — removes the per-session dedup index (keyed on `CLAUDE_SESSION_ID`) so the fresh compacted session can re-read files freely
+1. **Clear the read-once cache** — removes the per-session dedup index (keyed on the `session_id` from the hook's stdin JSON; `CLAUDE_SESSION_ID` is not set in the hook env) so the fresh compacted session can re-read files freely
 2. **Inject nothing** — Claude can't act mid-compaction, so the hook emits no output. The continuation path is the handoff workflow: SessionStart with `source=compact` harvests the compaction summary into a handoff scratch file and injects it as `additionalContext` so the next session resumes automatically.
 
 ### Compaction as a Dormant Safety Net
@@ -129,8 +131,8 @@ Fires when Claude finishes responding. Lightweight session tracking.
 
 ### What It Does
 
-1. **Increment message counter** — one awk pass updates the count and last-activity time in `~/.claude/memory-staging/<slug>/.session-meta`, deriving duration from the `session_start_epoch` SessionStart wrote.
-2. **Check thresholds** — fires at 15 and 30 messages (30 checked first, with independent sent-flags so a session that jumps past 15 still nudges), or after 45+ minutes; also checks the 24-hour dream timer.
+1. **Increment message counter** — one awk pass updates the count and last-activity time in `~/.claude/memory-staging/<slug>/.session-meta.<session_id>` (id read from stdin with a bash regex, no jq), deriving duration from the `session_start_epoch` SessionStart wrote.
+2. **Check thresholds** — fires at 15 and 30 messages (30 checked first, with independent sent-flags so a session that jumps past 15 still nudges), or after 45+ minutes. (The 24-hour dream timer is checked at SessionStart, not here.)
 3. **Emit nudge** — via `systemMessage` (shown to the user, not Claude): "This session looks substantial. Consider running /memory-sync before ending."
 
 ### Why Not Auto-Write Sessions on Stop
@@ -148,8 +150,8 @@ Fires when the session ends (close, `exit`, `logout`, or `/clear`). It catches t
 ### What It Does
 
 1. **Read the end reason** from stdin. A `clear` is a deliberate wipe — skip it.
-2. **Detect and clamp the slug**, then read `.session-meta`.
-3. **Flag if unsynced** — if the session ran to real length (≥10 messages) and `.session-meta` has no `synced=true`, write an `.unsynced` marker (end time + message count) to staging.
+2. **Detect and clamp the slug**, then read this session's `.session-meta.<session_id>`.
+3. **Flag if unsynced** — if the session ran to real length (≥10 messages) and its meta has no `synced=true`, write an `.unsynced` marker (end time + message count) to staging.
 
 It emits no stdout and always exits 0 — SessionEnd can't block or inject. The next SessionStart surfaces the marker; `/memory-sync` owns removing it.
 
@@ -169,7 +171,7 @@ Fires on every prompt. Surfaces a logged correction the moment the prompt touche
 
 1. **Detect and clamp the slug.**
 2. **Fast exit** — if there's no `.corrections-index` for the project (the common case), exit before reading stdin or spawning anything. This keeps the per-prompt cost under the 100ms budget.
-3. **Match** — otherwise, lowercase the prompt and literal-substring-match it against the index keys (built by SessionStart from correction-note titles).
+3. **Match** — otherwise, normalise the prompt and each index key the same way (lowercase, apostrophes dropped, other punctuation to spaces, a trailing `s` stemmed) and fire when every significant word of the key appears as a whole word in the prompt, in any order. Filler words (`dont`, `use`, `on`, ...) and one-letter tokens are ignored, so `dont-use-sed-i-on-macos` matches "don't use sed -i on macOS please". Keys come from correction-note titles, indexed by SessionStart.
 4. **Inject a pointer** — on a hit, emit `additionalContext`: "Correction(s) on record for: X. Load the details via memberberry before proceeding." (`MEMORY_HOOK_PLAINTEXT=1` falls back to plain stdout.)
 
 ### Why Just-in-Time
@@ -268,7 +270,7 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 │   └── read-once/hook.sh                  # PreToolUse hook
 ├── memory-staging/                        # Local staging for hook → MCP bridge
 │   └── my-project/
-│       ├── .session-meta                  # Message count, timestamps, synced flag
+│       ├── .session-meta.<session_id>     # Per-session message count, timestamps, synced flag
 │       ├── .corrections-index             # title|key index for UserPromptSubmit
 │       ├── .unsynced                      # written by SessionEnd, cleared by /memory-sync
 │       ├── handoff.md                     # Current-work-unit scratch (written by /handoff)

@@ -42,7 +42,7 @@ Log sessions where: key decisions were made, meaningful progress occurred, a dir
 
 ### Dream Consolidation
 
-Roughly every 24 hours the Stop hook surfaces a 💤 dream-pending nudge. When you see it (or when I ask), run `/memory-sync --dream` — it mines recent transcripts for un-logged decisions, corrections, and preferences, cross-references the vault, flags contradictions, and prunes stale sessions. It never writes without my approval — present the dream report first.
+Roughly every 24 hours the SessionStart hook surfaces a 💤 dream-pending nudge. When you see it (or when I ask), run `/memory-sync --dream` — it mines recent transcripts for un-logged decisions, corrections, and preferences, cross-references the vault, flags contradictions, and prunes stale sessions. It never writes without my approval — present the dream report first.
 
 ## Writing & Voice
 
@@ -103,7 +103,7 @@ Commands describe vault operations as verbs; map them to whichever server is reg
 
 ```
 ~/.claude/memory-staging/<slug>/       # Hook staging (local, ephemeral)
-    .session-meta                      # Message count, timestamps
+    .session-meta.<session_id>         # Message count, timestamps (one per session)
     handoff.md                         # Current-work-unit scratch (written by /handoff)
     handoff.consumed.md                # Renamed by SessionStart after injection
 

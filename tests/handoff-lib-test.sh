@@ -4,6 +4,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Hooks fall back to CLAUDE_CODE_SESSION_ID; keep a run from inside Claude Code deterministic.
+unset CLAUDE_CODE_SESSION_ID CLAUDE_SESSION_ID
 source "$HERE/../hooks/handoff-lib.sh"
 FIX="$HERE/fixtures/transcript-windowed.jsonl"
 
@@ -406,18 +408,18 @@ B2_HOME="$(mktemp -d)"
 B2_DIR="$B2_HOME/$(printf 'd%.0s' {1..60})/$(printf 'e%.0s' {1..60})/$(printf 'f%.0s' {1..60})"
 mkdir -p "$B2_DIR"
 B2_FILE="$B2_DIR/target.txt"; echo content > "$B2_FILE"
-B2_PAYLOAD="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE\"}}"
-B2_RC1=0; printf '%s' "$B2_PAYLOAD" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" >/dev/null 2>&1 || B2_RC1=$?
-B2_RC2=0; B2_OUT2="$(printf '%s' "$B2_PAYLOAD" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" 2>/dev/null)" || B2_RC2=$?
+B2_PAYLOAD="{\"session_id\":\"b2test\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE\"}}"
+B2_RC1=0; printf '%s' "$B2_PAYLOAD" | HOME="$B2_HOME" bash "$RO" >/dev/null 2>&1 || B2_RC1=$?
+B2_RC2=0; B2_OUT2="$(printf '%s' "$B2_PAYLOAD" | HOME="$B2_HOME" bash "$RO" 2>/dev/null)" || B2_RC2=$?
 assert_eq       "B2: long path first read exits 0"     "0"       "$B2_RC1"
 assert_eq       "B2: long path second read exits 0"    "0"       "$B2_RC2"
 assert_contains "B2: long path second read is deduped" "already" "$B2_OUT2"
 
 # Accented path regression (bytes >=0x80 could put "/" in a base64 key).
 B2_FILE2="$B2_HOME/café.txt"; echo content > "$B2_FILE2"
-B2_PAYLOAD2="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE2\"}}"
-printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" >/dev/null 2>&1 || true
-B2_OUT4="$(printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" 2>/dev/null)" || true
+B2_PAYLOAD2="{\"session_id\":\"b2test\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE2\"}}"
+printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" bash "$RO" >/dev/null 2>&1 || true
+B2_OUT4="$(printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" bash "$RO" 2>/dev/null)" || true
 assert_contains "B2: accented path second read is deduped" "already" "$B2_OUT4"
 rm -rf "$B2_HOME"
 

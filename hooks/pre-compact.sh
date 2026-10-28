@@ -10,8 +10,14 @@
 set -euo pipefail
 
 # Clear read-once cache for THIS session only — other sessions keep theirs.
-if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
-    RO_SESSION=$(echo "$CLAUDE_SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+# session_id comes from stdin, the same key read-once/hook.sh uses (CLAUDE_SESSION_ID
+# is not set in the hook env). Without jq, fall back to a sed extraction.
+STDIN_JSON=$(cat || true)
+RO_SESSION=$(printf '%s' "$STDIN_JSON" | jq -r '.session_id // empty' 2>/dev/null \
+    || printf '%s' "$STDIN_JSON" | sed -n 's/.*"session_id" *: *"\([^"]*\)".*/\1/p' | head -1)
+[[ -z "$RO_SESSION" ]] && RO_SESSION="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+RO_SESSION=$(printf '%s' "$RO_SESSION" | tr -cd 'A-Za-z0-9_-')
+if [[ -n "$RO_SESSION" ]]; then
     rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true
 fi
 
