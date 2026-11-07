@@ -10,8 +10,15 @@
 set -euo pipefail
 
 # Clear read-once cache for THIS session only — other sessions keep theirs.
-if [[ -n "${CLAUDE_SESSION_ID:-}" ]]; then
-    RO_SESSION=$(echo "$CLAUDE_SESSION_ID" | tr -cd 'A-Za-z0-9_-')
+# The session is the hook input's session_id; CLAUDE_SESSION_ID is a fallback
+# for a Claude Code that sets it, since hooks are not promised the variable.
+STDIN_JSON=""
+IFS= read -r -d '' STDIN_JSON || true
+RO_SESSION=""
+[[ $STDIN_JSON =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && RO_SESSION="${BASH_REMATCH[1]}"
+RO_SESSION="${RO_SESSION:-${CLAUDE_SESSION_ID:-}}"
+RO_SESSION="${RO_SESSION//[^A-Za-z0-9_-]/}"
+if [[ -n "$RO_SESSION" ]]; then
     rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true
 fi
 

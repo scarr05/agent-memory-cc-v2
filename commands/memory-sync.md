@@ -28,12 +28,59 @@ Consolidate this session's context into the Obsidian vault. $ARGUMENTS
 
 ## Modes
 
-Parse $ARGUMENTS for mode flags:
+Mode flags, parsed by Step 0 (an unknown flag, or two modes at once, stops there):
 - **(no args)** — Standard session sync (default)
 - **--dream** — Deep consolidation: mine transcripts, cross-reference vault, prune stale sessions (includes --ingest and --tidy)
 - **--ingest** — Pull auto-memory from this project into vault (alias for dream Phase 3)
 - **--tidy** — Review old sessions for staleness and archive candidates (alias for dream Phase 4)
 - **--status** — Show current memory state without writing anything
+- **--auto**: combines with any of the above: ask nothing, wait for nothing (see Auto mode). Always on in a Chief lead (`CHIEF_LEAD=1`).
+
+### Step 0: Mode and paths
+
+```bash
+HOOKS="$HOME/.claude/hooks"
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
+bash "$HOOKS/state-lib.sh" args memory-sync <<'SYNC_ARGS' || exit 2
+$ARGUMENTS
+SYNC_ARGS
+# This session's own staging: Claude Code substitutes the session id below. SLOT_DIR
+# holds the handoff pair (Sam: the project folder; a lead: leads/<worktree>/).
+bash "$HOOKS/state-lib.sh" paths --session "${CLAUDE_SESSION_ID}"
+```
+
+Use the printed `MODE`, `AUTO`, `SLUG`, `SLOT_DIR` and `TRANSCRIPT` below. `AUTO=1` means every rule in Auto mode applies.
+
+## Auto mode
+
+`AUTO=1` (from `--auto`, or a Chief lead) is for a session nobody is watching: Chief sends `/memory-sync` and waits for the turn to end, so a question would leave the lead waiting for good (a question in prose still ends the turn as `done`, spike H). Never call `AskUserQuestion` and never end on a question or an offer. Each place the interactive sync asks does this instead:
+
+| Where it asks | What auto does instead |
+|---|---|
+| Step 1: a trivial session ("ask if the user still wants to log it") | Log it anyway: a short session note (Context and Progress, a line each), then on to Step 6, so the sync marker is written |
+| Step 4: the `AskUserQuestion` multi-select for learnings | Approve nothing. Write each candidate to the project's own memory as a proposal (below); never to `5 Agent Memory/learnings/`, so a lead's output never reaches `learnings/corrections/` or global preferences, which Sam's own sessions load (SPEC section 8) |
+| `--ingest`: items that would go through Step 4 | Proposals, as above; the rest go where Ingest Step 3 says |
+| `--dream` and `--tidy`: the report Sam ticks | Write the Dream Report (or the tidy proposal) to `5 Agent Memory/working/<YYYY-MM-DD>-dream-<slug>.md` with frontmatter, and write nothing else: no `_decisions.md` entries from transcripts, no index or date patches, no archive, no Phase 4.4 timestamp, so `.dream-pending` still nudges Sam |
+| Contradictions | Listed in the proposal or report, never resolved |
+| Step 7 and `--status`: the closing summary | Plain lines of what was written; no offer, no "tell me if" |
+
+A learning proposal is one note per learning at `5 Agent Memory/sessions/by-project/<slug>/proposed-learnings/<YYYY-MM-DD>-<kebab-title>.md`:
+
+```yaml
+---
+title: "<title>"
+created: <ISO datetime>
+type: learning-proposal
+status: proposed
+category: <preferences|technical|workflow|corrections>
+project: "<slug>"
+source: <lead if CHIEF_LEAD=1, else auto>
+auto: true
+session: "<session note filename>"
+---
+```
+
+Then the learning in a sentence or two, and why this session showed it. No `- [ ]` lines: SessionStart lists those as open items. Chief's weekly review puts proposals in front of Sam; only his approval moves one into `learnings/`.
 
 ## Standard Sync (default)
 
@@ -46,7 +93,7 @@ Review the current conversation and determine:
 - **Open items** remaining
 - **Patterns observed** (preferences, corrections, recurring approaches)
 
-If this session was trivial (quick Q&A, no decisions), say so and ask if the user still wants to log it.
+If this session was trivial (quick Q&A, no decisions), say so and ask if the user still wants to log it. Under `AUTO=1`, log it anyway (Auto mode).
 
 ### Step 2: Check for Prior Sessions
 
@@ -60,11 +107,11 @@ Search `5 Agent Memory/sessions/` for recent sessions on the same project. Note 
 
 A long effort spans several clears, each producing a handoff stamped with `supersedes` pointing at the prior one. To avoid writing N near-duplicate session notes for one effort:
 
-1. Read the current scratch pair if present:
+1. Read the current scratch pair if present (`SLOT_DIR` from Step 0):
 
 ```bash
-cat ~/.claude/memory-staging/<slug>/handoff.md 2>/dev/null
-cat ~/.claude/memory-staging/<slug>/handoff.consumed.md 2>/dev/null
+cat "<SLOT_DIR>/handoff.md" 2>/dev/null
+cat "<SLOT_DIR>/handoff.consumed.md" 2>/dev/null
 ```
 
 2. Extract this effort's **fingerprint**: the `## Files Touched (this work unit)` list. (File-list overlap across consecutive sessions is the effort matcher — see step 3.)
@@ -190,7 +237,7 @@ search vault for "<key phrase from the correction>"
 
 If none survive deduplication, skip to Step 5.
 
-**Approve with one multi-select.** Call `AskUserQuestion` once for the whole list, every question `multiSelect: true`:
+**Approve with one multi-select.** Under `AUTO=1`, skip this: write each candidate as a proposal (Auto mode) and go to Step 5. Otherwise call `AskUserQuestion` once for the whole list, every question `multiSelect: true`:
 
 | Field | Value |
 |---|---|
@@ -232,38 +279,27 @@ awk '/^\| / && length > 400 { print "ROW TOO LONG at line " NR; bad=1 } END { ex
 
 ### Step 6: Clean Up Staging
 
-Check `~/.claude/memory-staging/<slug>/` for:
+After the session note is written:
 
-1. **Handoff scratch** — after the session note is written, `handoff.md` and `handoff.consumed.md` are superseded by the vault note. Delete them.
-2. **Session meta** — reset `message_count=0` for the next session.
-3. **Synced flag** — record that this session has been synced and clear any stale `.unsynced` marker.
+1. **Handoff scratch**: this slot's `handoff.md` and `handoff.consumed.md` are superseded by the vault note. Delete them.
+2. **Session meta**: this session's `message_count` goes back to 0.
+3. **Synced flag**: this session's meta gets `synced=true` and `synced_at=<epoch>` (SessionEnd reads the flag; Chief compares the time with a ticket's start), and the slot's stale `.unsynced` marker goes.
+
+Only this session's meta changes, so a sync in a lead never marks Sam's session synced, or the other way round.
 
 ```bash
-rm -f ~/.claude/memory-staging/<slug>/handoff.md ~/.claude/memory-staging/<slug>/handoff.consumed.md
-META=~/.claude/memory-staging/<slug>/.session-meta
-
-# `sed -i EXPR FILE` is GNU-only — BSD/macOS sed reads EXPR as the backup suffix
-# and errors. Write to a temp and mv; works on both userlands.
-sed_i() { sed "$1" "$2" > "$2.tmp.$$" && mv "$2.tmp.$$" "$2" || rm -f "$2.tmp.$$"; }  # same as handoff-lib.sh
-
-sed_i 's/message_count=[0-9]*/message_count=0/' "$META" || true
-
-# Mark synced (SessionEnd reads this) and clear any stale unsynced marker. Upsert
-# the flag (replace if present, else append) so repeat syncs never pile up
-# duplicate synced= lines.
-if grep -q '^synced=' "$META" 2>/dev/null; then
-    sed_i 's/^synced=.*/synced=true/' "$META"
-else
-    echo "synced=true" >> "$META"
-fi
-rm -f ~/.claude/memory-staging/<slug>/.unsynced
+HOOKS="$HOME/.claude/hooks"
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
+SLOT=$(bash "$HOOKS/state-lib.sh" paths --session "${CLAUDE_SESSION_ID}" | sed -n 's/^SLOT_DIR=//p')
+[[ -n "$SLOT" ]] && rm -f "$SLOT/handoff.md" "$SLOT/handoff.consumed.md"
+bash "$HOOKS/state-lib.sh" mark synced --session "${CLAUDE_SESSION_ID}"
 ```
 
-A fresh SessionStart resets `.session-meta`, so `synced=true` applies only to the current session.
+`MARKED: synced` means done. A fresh SessionStart gives the next session its own meta, so `synced=true` applies only to this session.
 
 ### Step 7: Confirm
 
-Tell the user:
+Tell the user (under `AUTO=1`, as plain lines with no offer or question):
 - What was written and where
 - Learnings written, and how many were dropped or left in `working/`
 - Any open items carried forward
@@ -375,11 +411,11 @@ Build a mental map: what topics are covered, what decisions are logged, what lea
 
 ### Dream Phase 2: Gather Signal
 
-Find recent JSONL session transcripts for the current project. They sit directly in `~/.claude/projects/<encoded-cwd>/`, not in a `sessions/` subfolder. The hooks record this session's transcript in the staging breadcrumb, so its directory is the project's transcript folder:
+Find recent JSONL session transcripts for the current project. They sit directly in `~/.claude/projects/<encoded-cwd>/`, not in a `sessions/` subfolder. Step 0 printed this session's transcript (`TRANSCRIPT`, from the hooks' per-session breadcrumb), so its directory is the project's transcript folder:
 
 ```bash
-# Breadcrumb may hold a Windows path (backslashes): convert before dirname, or it returns "."
-DIR=$(dirname "$(tr -d '\r' < ~/.claude/memory-staging/<slug>/.transcript-path 2>/dev/null | tr '\\' '/')")
+# The path may be a Windows one (backslashes): convert before dirname, or it returns "."
+DIR=$(dirname "$(printf '%s' '<TRANSCRIPT>' | tr '\\' '/')")
 # Skip headless `claude -p` runs (entrypoint sdk-cli): they are agent tests, not conversations
 find "$DIR" -maxdepth 1 -name '*.jsonl' -mtime -7 2>/dev/null \
   | while IFS= read -r f; do grep -q '"entrypoint":"sdk-cli"' "$f" || printf '%s\n' "$f"; done \

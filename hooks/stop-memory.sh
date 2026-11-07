@@ -19,10 +19,27 @@ LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=
 # shellcheck source=/dev/null
 if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_slug; else SLUG="unknown"; fi
 
-PROJECT_DIR="$STAGING_DIR/$SLUG"
-META_FILE="$PROJECT_DIR/.session-meta"
+# The Stop payload, read with a builtin (no fork) on every turn: its session_id
+# picks this session's meta. The token nudge below reuses it.
+STDIN_JSON=""
+IFS= read -r -d '' STDIN_JSON || true
 
-[[ -d "$PROJECT_DIR" ]] || mkdir -p "$PROJECT_DIR"
+# --- Where this session's state lives (state-lib.sh, beside this hook) ---
+# SESSION_DIR is keyed by the hook input's session_id, so two sessions in one
+# project keep separate counts; SLOT_DIR holds what crosses /clear. Without the
+# library or a session id, both are the project folder, as before.
+SESSION_ID=""
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$LIBDIR/state-lib.sh"
+    state_session_id "$STDIN_JSON"; state_dirs
+else
+    PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+fi
+
+META_FILE="$SESSION_DIR/.session-meta"
+
+[[ -d "$SESSION_DIR" ]] || mkdir -p "$SESSION_DIR"
 
 NOW_EPOCH=$(date +%s)
 NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -96,20 +113,19 @@ fi
 MSG_NOW=$(sed -n 's/^message_count=\([0-9]*\).*/\1/p' "$META_FILE" | head -1); MSG_NOW="${MSG_NOW:-0}"
 if [[ "$MSG_NOW" -ge 8 ]] && ! grep -q '^handoff_nudge_sent=true' "$META_FILE" 2>/dev/null; then
     # Lazily source the library (function defs only; its CLI dispatcher is guarded by
-    # BASH_SOURCE==$0) and read the Stop stdin payload — only now is the cost worth it.
+    # BASH_SOURCE==$0) and parse the Stop payload read above: only now is jq worth it.
     HANDOFF_LIB=0
     if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
         # shellcheck source=/dev/null
         source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
     fi
-    STDIN_JSON=$(cat || true)
     TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
     # Refresh the /handoff transcript breadcrumb. The path is stable within a session;
     # writing it on the turns leading up to the nudge keeps it current for when the
     # user actually runs /handoff.
     if [[ -n "$TRANSCRIPT" ]]; then
-        printf '%s\n' "$TRANSCRIPT" > "$PROJECT_DIR/.transcript-path" 2>/dev/null || true
+        printf '%s\n' "$TRANSCRIPT" > "$SESSION_DIR/.transcript-path" 2>/dev/null || true
     fi
 
     if [[ "$HANDOFF_LIB" == "1" ]] && [[ -n "$TRANSCRIPT" ]]; then

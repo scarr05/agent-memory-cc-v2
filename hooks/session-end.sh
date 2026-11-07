@@ -23,8 +23,20 @@ LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=
 # shellcheck source=/dev/null
 if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_slug; else SLUG="unknown"; fi
 
-PROJECT_DIR="$STAGING_DIR/$SLUG"
-META_FILE="$PROJECT_DIR/.session-meta"
+# --- Where this session's state lives (state-lib.sh, beside this hook) ---
+# SESSION_DIR is keyed by the hook input's session_id, so two sessions in one
+# project keep separate counts; SLOT_DIR holds what crosses /clear. Without the
+# library or a session id, both are the project folder, as before.
+SESSION_ID=""
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$LIBDIR/state-lib.sh"
+    state_session_id "$STDIN_JSON"; state_dirs
+else
+    PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+fi
+
+META_FILE="$SESSION_DIR/.session-meta"
 
 # Bare /clear with no armed handoff: deterministically harvest a clear-fallback
 # so the thread is never silently lost. Never clobber an active manual handoff.
@@ -38,13 +50,13 @@ if [[ "$REASON" == "clear" ]]; then
         source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
     fi
     TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
-    if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" && ! -f "$PROJECT_DIR/handoff.md" ]]; then
-        mkdir -p "$PROJECT_DIR"
-        build_deterministic_handoff --transcript "$TRANSCRIPT" --slug "$SLUG" --source clear-fallback --out "$PROJECT_DIR/handoff.md" 2>/dev/null || true
+    if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" && ! -f "$SLOT_DIR/handoff.md" ]]; then
+        mkdir -p "$SLOT_DIR"
+        build_deterministic_handoff --transcript "$TRANSCRIPT" --slug "$SLUG" --source clear-fallback --out "$SLOT_DIR/handoff.md" 2>/dev/null || true
         # Route through finalize so the supersedes chain is stamped. source is
         # clear-fallback (not handoff), so the narrative thin-guard is skipped and
         # the deterministic-only fallback always arms.
-        finalize_handoff --out "$PROJECT_DIR/handoff.md" --consumed "$PROJECT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
+        finalize_handoff --out "$SLOT_DIR/handoff.md" --consumed "$SLOT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
     fi
     exit 0
 fi
@@ -59,7 +71,7 @@ MESSAGE_COUNT="${MESSAGE_COUNT:-0}"
 # /memory-sync writes synced=true (Task 7) and owns removal of .unsynced; this
 # hook only creates it. SessionStart surfaces it on the next full-path start.
 if [[ "$MESSAGE_COUNT" -ge 10 ]] && ! grep -q '^synced=true' "$META_FILE" 2>/dev/null; then
-    cat > "$PROJECT_DIR/.unsynced" << EOF
+    cat > "$SLOT_DIR/.unsynced" << EOF
 ended=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 messages=$MESSAGE_COUNT
 EOF
