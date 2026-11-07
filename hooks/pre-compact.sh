@@ -14,9 +14,11 @@ set -euo pipefail
 # for a Claude Code that sets it, since hooks are not promised the variable.
 STDIN_JSON=""
 IFS= read -r -d '' STDIN_JSON || true
-RO_SESSION=""
-[[ $STDIN_JSON =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && RO_SESSION="${BASH_REMATCH[1]}"
-RO_SESSION="${RO_SESSION:-${CLAUDE_SESSION_ID:-}}"
+LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
+SESSION_ID=""
+# shellcheck source=/dev/null
+[[ -f "$LIBDIR/state-lib.sh" ]] && { source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; }
+RO_SESSION="${SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 RO_SESSION="${RO_SESSION//[^A-Za-z0-9_-]/}"
 if [[ -n "$RO_SESSION" ]]; then
     rm -rf "$HOME/.claude/read-once/cache/$RO_SESSION" 2>/dev/null || true

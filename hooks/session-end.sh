@@ -14,8 +14,9 @@ STAGING_DIR="$HOME/.claude/memory-staging"
 # so it can harvest a clear-fallback handoff (handled below). Fail open otherwise.
 # The transcript and the handoff library are read lazily in the clear branch only,
 # so the common non-clear path (logout/other) stays lean.
-STDIN_JSON=$(cat || true)
-REASON=$(printf '%s' "$STDIN_JSON" | jq -r '.reason // empty' 2>/dev/null || true)
+STDIN_JSON=""
+IFS= read -r -d '' STDIN_JSON || true
+REASON=""; [[ $STDIN_JSON =~ \"reason\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && REASON="${BASH_REMATCH[1]}"
 
 # --- Slug: the shared lookup (slug-lib.sh, beside this hook) ---
 # Without it the hook stages under "unknown" rather than guess a directory.
@@ -27,14 +28,9 @@ if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_sl
 # SESSION_DIR is keyed by the hook input's session_id, so two sessions in one
 # project keep separate counts; SLOT_DIR holds what crosses /clear. Without the
 # library or a session id, both are the project folder, as before.
-SESSION_ID=""
-if [[ -f "$LIBDIR/state-lib.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "$LIBDIR/state-lib.sh"
-    state_session_id "$STDIN_JSON"; state_dirs
-else
-    PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
-fi
+SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; fi
 
 META_FILE="$SESSION_DIR/.session-meta"
 

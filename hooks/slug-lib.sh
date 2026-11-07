@@ -43,12 +43,13 @@ _slug_read() {
     [[ -n "$_found" ]]
 }
 
-# Lowercase, everything outside [a-z0-9-] as `-`.
+# Lowercase; everything outside [a-z0-9-] becomes $2 (default `-`, may be empty).
 _slugify() {
+    local r="${2-"-"}"
     if (( BASH_VERSINFO[0] >= 4 )); then
-        _found="${1,,}"; _found="${_found//[^a-z0-9-]/-}"
+        _found="${1,,}"; _found="${_found//[^a-z0-9-]/$r}"   # builtins: no forks on the hot path
     else
-        _found=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+        _found=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed "s/[^a-z0-9-]/$r/g")
     fi
 }
 
@@ -120,12 +121,7 @@ detect_slug_raw() {
 # Sets SLUG, clamped to [a-z0-9-] ("unknown" when nothing is left), and _DETECTED_VIA.
 resolve_slug() {
     detect_slug_raw
-    if (( BASH_VERSINFO[0] >= 4 )); then
-        SLUG="${SLUG,,}"; SLUG="${SLUG//[^a-z0-9-]/}"   # builtins: no forks on the hot path
-    else
-        SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-    fi
-    [[ -z "$SLUG" ]] && SLUG="unknown"
+    _slugify "$SLUG" ""; SLUG="${_found:-unknown}"
     return 0
 }
 

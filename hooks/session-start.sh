@@ -10,7 +10,7 @@ CLAUDE_MD=".claude/CLAUDE.md"
 OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
 # Shared handoff harvest library (degrade gracefully if a partial install omits it).
-LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
 if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
     # shellcheck source=/dev/null
     source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
@@ -81,17 +81,12 @@ AREA=$(printf '%s' "$AREA" | tr -dc 'A-Za-z0-9 _-' | head -c 64)
 # PROJECT_DIR itself, a lead's is leads/<worktree>), SESSION_DIR for this
 # session alone, keyed by the hook input's session_id. Without the library, or
 # without a session id, all three are the project folder, as before.
-SESSION_ID=""
-if [[ -f "$LIBDIR/state-lib.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "$LIBDIR/state-lib.sh"
-    state_session_id "$STDIN_JSON"; state_dirs
-else
-    PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
-fi
+SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; fi
 
 # Ensure staging directories exist
-mkdir -p "$PROJECT_DIR" "$SLOT_DIR" "$SESSION_DIR"
+mkdir -p "$SLOT_DIR" "$SESSION_DIR"
 
 # Authoritative transcript breadcrumb for /handoff, per session. The Stop hook
 # refreshes it; writing it here covers the window before the first Stop.
@@ -114,15 +109,15 @@ if [[ -n "$SESSION_ID" ]]; then
     [[ -n "$LAST_SESSION" ]] && PRIOR_META="$PROJECT_DIR/sessions/$LAST_SESSION/.session-meta"
 fi
 if [[ -f "$PRIOR_META" ]]; then
-    PRIOR_SESSION_INFO=$(cat "$PRIOR_META")
+    IFS= read -r -d '' PRIOR_SESSION_INFO <"$PRIOR_META" || true
 fi
 # This session is now the slot's newest: the commands fall back to it when
 # Claude Code does not hand them their own session id.
 if [[ -n "$SESSION_ID" ]]; then
     printf '%s\n' "$SESSION_ID" > "$SLOT_DIR/.last-session" 2>/dev/null || true
 fi
-PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
-PRIOR_COUNT="${PRIOR_COUNT:-0}"
+PRIOR_COUNT=0
+[[ $PRIOR_SESSION_INFO =~ message_count=([0-9]+) ]] && PRIOR_COUNT="${BASH_REMATCH[1]}"
 
 # --- Fast path: post-/clear restart ---
 # /clear wipes conversation memory but keeps on-disk state. If a handoff was

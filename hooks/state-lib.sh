@@ -44,12 +44,12 @@ _state_worktree() {
         [[ "$line" == */worktrees/* ]] && _found="${line##*/}"
     fi
     if [[ -z "$_found" && ! -d .git ]] && command -v git &>/dev/null; then
-        line=$(git rev-parse --absolute-git-dir 2>/dev/null || true); line="${line%/}"
-        if [[ "$line" == */worktrees/* ]]; then
-            _found="${line##*/}"
-        else
-            top=$(git rev-parse --show-toplevel 2>/dev/null || true)
-        fi
+        # One fork for both: line 1 the git dir, line 2 the toplevel. A bare repo
+        # prints line 1 only, so top stays empty and falls back to $PWD below.
+        line=$(git rev-parse --absolute-git-dir --show-toplevel 2>/dev/null || true)
+        [[ "$line" == *$'\n'* ]] && top="${line#*$'\n'}"
+        line="${line%%$'\n'*}"; line="${line%/}"
+        [[ "$line" == */worktrees/* ]] && _found="${line##*/}"
     fi
     [[ -z "$_found" ]] && { top="${top:-$PWD}"; top="${top%/}"; _found="${top##*/}"; }
     _found="${_found//[^A-Za-z0-9_-]/}"
@@ -122,8 +122,10 @@ _state_resolve() {
     if [[ -z "$SESSION_ID" ]]; then
         state_last_session
         SESSION_ID="$LAST_SESSION"
-        SESSION_SOURCE="none"; [[ -n "$SESSION_ID" ]] && SESSION_SOURCE="pointer"
-        state_dirs
+        SESSION_SOURCE="none"
+        if [[ -n "$SESSION_ID" ]]; then
+            SESSION_SOURCE="pointer"; SESSION_DIR="$PROJECT_DIR/sessions/$SESSION_ID"
+        fi
     fi
     TRANSCRIPT=""
     if [[ -f "$SESSION_DIR/.transcript-path" ]]; then
@@ -155,12 +157,12 @@ _state_cli_paths() {
 #   handoff:     --auto, then free text kept as NOTE.
 # AUTO=1 also when CHIEF_LEAD=1: a lead never has anyone to answer a question.
 _state_cli_args() {
-    local cmd="${1:-}" text="" word mode="" auto=0 why="" note=() words=()
+    local cmd="${1:-}" text="" word mode="" auto=0 why="" note=""
     [[ "$cmd" == "memory-sync" || "$cmd" == "handoff" ]] || _state_die "args: memory-sync or handoff"
     text=$(cat || true)
     text="${text//$'\r'/}"
-    read -r -d '' -a words <<<"$text" || true
-    for word in "${words[@]}"; do
+    set -f   # split on whitespace without expanding a bare * in a note
+    for word in $text; do
         case "$word" in
             --auto)
                 [[ "$auto" == 1 ]] && _state_die "$cmd: --auto given twice"
@@ -172,14 +174,15 @@ _state_cli_args() {
             -*) _state_die "$cmd: unknown flag '$word'";;
             *)
                 [[ "$cmd" == "handoff" ]] || _state_die "$cmd: takes flags only, not '$word'"
-                note+=("$word");;
+                note="${note:+$note }$word";;
         esac
     done
+    set +f
     if [[ "$cmd" == "handoff" ]]; then mode="handoff"; else mode="${mode:-standard}"; fi
     [[ "$auto" == 0 && "${CHIEF_LEAD:-}" == "1" ]] && { auto=1; why="lead"; }
     printf '%s=%s\n' COMMAND "$cmd" MODE "$mode" AUTO "$auto"
     [[ -n "$why" ]] && printf 'AUTO_WHY=%s\n' "$why"
-    [[ "$cmd" == "handoff" ]] && printf 'NOTE=%s\n' "${note[*]}"
+    [[ "$cmd" == "handoff" ]] && printf 'NOTE=%s\n' "$note"
     return 0
 }
 
