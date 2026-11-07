@@ -10,7 +10,7 @@ CLAUDE_MD=".claude/CLAUDE.md"
 OBS="${OBSIDIAN_CLI_PATH:-obsidian}"
 
 # Shared handoff harvest library (degrade gracefully if a partial install omits it).
-LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
 if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
     # shellcheck source=/dev/null
     source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1
@@ -40,85 +40,6 @@ emit_context_and_exit() {
     exit 0
 }
 
-# --- Project slug detection (unchanged from v2) ---
-
-detect_slug() {
-    _DETECTED_VIA=""
-
-    # Priority 1: Existing CLAUDE.md metadata
-    if [[ -f "$CLAUDE_MD" ]]; then
-        local slug
-        slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="claude-md-metadata"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 1b: .claude/memory-state.json from prior session
-    if [[ -f ".claude/memory-state.json" ]]; then
-        local slug
-        slug=$(jq -r '.slug // empty' .claude/memory-state.json 2>/dev/null || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="memory-state-file"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 2: .claude/settings.json custom field
-    if [[ -f ".claude/settings.json" ]]; then
-        local slug
-        slug=$(jq -r '.memory.projectSlug // empty' .claude/settings.json 2>/dev/null || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="settings-json"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 3: Git remote
-    if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
-        local remote
-        remote=$(git remote get-url origin 2>/dev/null || true)
-        if [[ -n "$remote" ]]; then
-            local slug
-            slug=$(echo "$remote" | sed -E 's/.*[:/]([^/]+)\.git$/\1/' | sed -E 's/.*[:/]([^/]+)$/\1/' | tr '[:upper:]' '[:lower:]')
-            if [[ -n "$slug" ]]; then
-                _DETECTED_VIA="git-remote"
-                echo "$slug"
-                return 0
-            fi
-        fi
-    fi
-
-    # Priority 4: Project manifest name
-    if [[ -f "package.json" ]]; then
-        local slug
-        slug=$(jq -r '.name // empty' package.json 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="package-json"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    if [[ -f "pyproject.toml" ]]; then
-        local slug
-        slug=$(sed -n 's/.*name = "\([^"]*\)".*/\1/p' pyproject.toml 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="pyproject-toml"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 5: Directory name
-    _DETECTED_VIA="directory-name"
-    basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
-}
-
 detect_area() {
     if [[ -f "$CLAUDE_MD" ]]; then
         local area
@@ -139,14 +60,14 @@ STDIN_JSON=$(cat || true)
 SOURCE=$(printf '%s' "$STDIN_JSON" | jq -r '.source // "startup"' 2>/dev/null || echo "startup")
 TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
-_DETECTED_VIA=""
-SLUG=$(detect_slug)
-# Defence in depth: detect_slug does not charset-filter the state-file,
-# settings.json, or git-remote branches. Clamp to the slug charset so a crafted
-# slug can never traverse out of the staging dir (it becomes part of rm -rf /
-# mkdir paths) or inject extra key=value args into the Obsidian CLI.
-SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-[[ -z "$SLUG" ]] && SLUG="unknown"
+# The shared lookup: marker, state file, settings.json, the main checkout's
+# files for a linked worktree, remote, manifest, directory. It clamps SLUG to
+# [a-z0-9-] itself, since the slug becomes part of rm -rf / mkdir paths and
+# Obsidian CLI arguments. This hook writes the state file, so it never reads
+# its own earlier answer back: a wrong slug would otherwise stick for good.
+SLUG_IGNORE_STATE=1
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_slug; else SLUG="unknown"; _DETECTED_VIA="slug-lib-missing"; fi
 DETECTED_VIA="$_DETECTED_VIA"
 AREA=$(detect_area)
 # Clamp AREA to a safe label charset. It reaches the memory-state.json heredoc and
@@ -154,38 +75,56 @@ AREA=$(detect_area)
 # corrupt that JSON (breaking jq-based slug reads on the next run). Path traversal is
 # already blocked by the SLUG clamp above — this is JSON hygiene + defence in depth.
 AREA=$(printf '%s' "$AREA" | tr -dc 'A-Za-z0-9 _-' | head -c 64)
-PROJECT_DIR="$STAGING_DIR/$SLUG"
 
-# Authoritative transcript breadcrumb for /handoff (CLAUDE_SESSION_ID is unset in
-# the command Bash env). The Stop hook refreshes this every turn; writing it here
-# covers the window before the first Stop.
+# Where each kind of state lives (state-lib.sh): PROJECT_DIR for the project,
+# SLOT_DIR for what this line of work hands its next session (Sam's is
+# PROJECT_DIR itself, a lead's is leads/<worktree>), SESSION_DIR for this
+# session alone, keyed by the hook input's session_id. Without the library, or
+# without a session id, all three are the project folder, as before.
+SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; fi
+
+# Ensure staging directories exist
+mkdir -p "$SLOT_DIR" "$SESSION_DIR"
+
+# Authoritative transcript breadcrumb for /handoff, per session. The Stop hook
+# refreshes it; writing it here covers the window before the first Stop.
 if [[ -n "${TRANSCRIPT:-}" ]]; then
-    mkdir -p "$PROJECT_DIR"
-    printf '%s\n' "$TRANSCRIPT" > "$PROJECT_DIR/.transcript-path" 2>/dev/null || true
+    printf '%s\n' "$TRANSCRIPT" > "$SESSION_DIR/.transcript-path" 2>/dev/null || true
 fi
-
-# Ensure staging directory exists
-[[ -d "$PROJECT_DIR" ]] || mkdir -p "$PROJECT_DIR"
 
 # Checkpoint stubs are retired (replaced by the handoff scratch). Keep the field
 # in the state file as an empty array for backward compatibility.
 PENDING_CHECKPOINTS=()
 
 # Capture the prior session's meta BEFORE the full path resets it. PRIOR_COUNT
-# feeds both the dream timer and the "previous session" hint further down.
+# feeds both the dream timer and the "previous session" hint further down. The
+# prior session is the slot's last one (.last-session), so a lead starting in
+# between never stands in for Sam's previous session, or the other way round.
 PRIOR_SESSION_INFO=""
-if [[ -f "$PROJECT_DIR/.session-meta" ]]; then
-    PRIOR_SESSION_INFO=$(cat "$PROJECT_DIR/.session-meta")
+PRIOR_META="$SLOT_DIR/.session-meta"
+if [[ -n "$SESSION_ID" ]]; then
+    state_last_session
+    [[ -n "$LAST_SESSION" ]] && PRIOR_META="$PROJECT_DIR/sessions/$LAST_SESSION/.session-meta"
 fi
-PRIOR_COUNT=$(echo "$PRIOR_SESSION_INFO" | sed -n 's/.*message_count=\([0-9]*\).*/\1/p' | head -1)
-PRIOR_COUNT="${PRIOR_COUNT:-0}"
+if [[ -f "$PRIOR_META" ]]; then
+    IFS= read -r -d '' PRIOR_SESSION_INFO <"$PRIOR_META" || true
+fi
+# This session is now the slot's newest: the commands fall back to it when
+# Claude Code does not hand them their own session id.
+if [[ -n "$SESSION_ID" ]]; then
+    printf '%s\n' "$SESSION_ID" > "$SLOT_DIR/.last-session" 2>/dev/null || true
+fi
+PRIOR_COUNT=0
+[[ $PRIOR_SESSION_INFO =~ message_count=([0-9]+) ]] && PRIOR_COUNT="${BASH_REMATCH[1]}"
 
 # --- Fast path: post-/clear restart ---
 # /clear wipes conversation memory but keeps on-disk state. If a handoff was
 # armed (manually via /handoff or by the SessionEnd clear-fallback), inject it
 # and mark it consumed so a second /clear cannot re-inject stale state.
 if [[ "$SOURCE" == "clear" ]]; then
-    HANDOFF_FILE="$PROJECT_DIR/handoff.md"
+    HANDOFF_FILE="$SLOT_DIR/handoff.md"
     if [[ -f "$HANDOFF_FILE" ]]; then
         if [[ "$HANDOFF_LIB" == "1" ]]; then
             NARR=$(extract_block NARRATIVE "$HANDOFF_FILE")
@@ -198,7 +137,7 @@ if [[ "$SOURCE" == "clear" ]]; then
             if [[ -L "$HANDOFF_FILE" ]]; then
                 CONTEXT+="\\n⚠ handoff.md is a symlink — not consuming it.\\n"
             else
-                mv "$HANDOFF_FILE" "$PROJECT_DIR/handoff.consumed.md" 2>/dev/null || true
+                mv "$HANDOFF_FILE" "$SLOT_DIR/handoff.consumed.md" 2>/dev/null || true
             fi
             emit_context_and_exit "$CONTEXT"
         fi
@@ -221,7 +160,7 @@ fi
 # blackbox-fill instruction — the stub mechanism it served is retired.
 if [[ "$SOURCE" == "compact" ]]; then
     if [[ "$HANDOFF_LIB" == "1" && -n "$TRANSCRIPT" ]]; then
-        CF="$PROJECT_DIR/handoff.md"
+        CF="$SLOT_DIR/handoff.md"
         # SUMM is assigned on every branch below before it is read further down.
         if [[ -f "$CF" ]]; then
             # An active handoff already exists (manual /handoff, or a prior compact
@@ -237,7 +176,7 @@ if [[ "$SOURCE" == "compact" ]]; then
             if [[ -n "$(printf '%s' "$SUMM" | tr -d '[:space:]')" ]]; then
                 # Stamp supersedes from any prior consumed handoff so /memory-sync can
                 # dedup the chain (source!=handoff => the thin-guard is skipped).
-                finalize_handoff --out "$CF" --consumed "$PROJECT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
+                finalize_handoff --out "$CF" --consumed "$SLOT_DIR/handoff.consumed.md" >/dev/null 2>&1 || true
             else
                 # Nothing recovered — drop the empty scratch so no stale handoff is left
                 # for a later /clear to inject.
@@ -309,24 +248,34 @@ cat > "$STATE_FILE" << STATEJSON
 }
 STATEJSON
 
-# Keep memory-state.json out of git status without touching tracked .gitignore
-GIT_DIR_PATH=$(git rev-parse --git-dir 2>/dev/null || true)
+# Keep memory-state.json out of git status without touching tracked .gitignore.
+# The common dir: git reads info/exclude only there, so a linked worktree's own
+# git dir (.git/worktrees/<name>) would hold an exclude nothing reads.
+GIT_DIR_PATH=$(git rev-parse --git-common-dir 2>/dev/null || true)
 if [[ -n "$GIT_DIR_PATH" ]]; then
     EXCLUDE_FILE="$GIT_DIR_PATH/info/exclude"
     if ! grep -q 'memory-state.json' "$EXCLUDE_FILE" 2>/dev/null; then
+        mkdir -p "$GIT_DIR_PATH/info" 2>/dev/null || true
         echo ".claude/memory-state.json" >> "$EXCLUDE_FILE" 2>/dev/null || true
     fi
 fi
 
 # Reset session meta. session_start_epoch is the cross-hook contract the Stop
 # hook reads to compute session duration without a date -d parse (Task 6).
-cat > "$PROJECT_DIR/.session-meta" << EOF
+cat > "$SESSION_DIR/.session-meta" << EOF
 session_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 session_start_epoch=$NOW_EPOCH
 message_count=0
 project_slug=$SLUG
 area=$AREA
 EOF
+
+# Session folders live a week past their last write (the Stop hook rewrites the
+# meta every turn), then go: they are per-session scratch, never read after.
+if [[ -d "$PROJECT_DIR/sessions" ]]; then
+    find "$PROJECT_DIR/sessions" -mindepth 1 -maxdepth 1 -type d -mtime +7 \
+        -exec rm -rf {} + 2>/dev/null || true
+fi
 
 # Check if memory-init has been run
 HAS_MEMORY_CONFIG="false"
@@ -531,9 +480,9 @@ fi
 # that supersedes the message-count heuristic below. Fall back to the heuristic
 # only when the flag is absent. /memory-sync owns removing .unsynced (PRIOR_COUNT
 # was captured before the meta reset above).
-if [[ -f "$PROJECT_DIR/.unsynced" ]]; then
-    UNSYNCED_MSGS=$(sed -n 's/^messages=\([0-9]*\).*/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
-    UNSYNCED_ENDED=$(sed -n 's/^ended=\(.*\)/\1/p' "$PROJECT_DIR/.unsynced" | head -1)
+if [[ -f "$SLOT_DIR/.unsynced" ]]; then
+    UNSYNCED_MSGS=$(sed -n 's/^messages=\([0-9]*\).*/\1/p' "$SLOT_DIR/.unsynced" | head -1)
+    UNSYNCED_ENDED=$(sed -n 's/^ended=\(.*\)/\1/p' "$SLOT_DIR/.unsynced" | head -1)
     CONTEXT+="⚠ **Previous session (${UNSYNCED_MSGS:-?} msgs, ended ${UNSYNCED_ENDED:-unknown}) was never synced.** Run \`/memory-sync\`.\\n\\n"
 elif [[ "$PRIOR_COUNT" -gt 10 ]]; then
     CONTEXT+="ℹ Previous session had $PRIOR_COUNT messages. Check if it was synced (\`/memory-sync --status\`).\\n\\n"

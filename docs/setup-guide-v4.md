@@ -112,7 +112,8 @@ Use this if you'd rather not run as a plugin, or you're on a Claude Code build w
 
 ```bash
 mkdir -p ~/.claude/hooks/read-once
-cp hooks/handoff-lib.sh hooks/session-start.sh hooks/pre-compact.sh hooks/stop-memory.sh \
+cp hooks/handoff-lib.sh hooks/slug-lib.sh hooks/state-lib.sh \
+   hooks/session-start.sh hooks/pre-compact.sh hooks/stop-memory.sh \
    hooks/session-end.sh hooks/prompt-corrections.sh ~/.claude/hooks/
 cp hooks/read-once/hook.sh ~/.claude/hooks/read-once/
 chmod +x ~/.claude/hooks/*.sh ~/.claude/hooks/read-once/hook.sh
