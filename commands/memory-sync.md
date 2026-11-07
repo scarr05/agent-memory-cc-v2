@@ -10,13 +10,11 @@ allowed-tools:
   - "mcp__obsidian__list_directory"
   - "mcp__obsidian__read_multiple_notes"
   - "mcp__obsidian__get_notes_info"
-  - "mcp__obsidian__vault_read"
   - "mcp__obsidian__vault_write"
   - "mcp__obsidian__vault_append"
   - "mcp__obsidian__vault_patch"
-  - "mcp__obsidian__vault_list"
-  - "mcp__obsidian__search_simple"
   - "mcp__obsidian__search_query"
+  - "AskUserQuestion"
   - "Agent"
   - "Bash"
   - "Read"
@@ -180,22 +178,40 @@ search vault for "<pattern keywords>"
 
 Search `5 Agent Memory/learnings/` for related learnings.
 
-If you spot a NEW pattern (preference, workflow, correction) not already captured:
-- Propose it to the user: "I noticed [pattern]. Should I save this as a learning?"
-- Only write to `learnings/` after approval
-- Use appropriate subcategory: `preferences/`, `technical/`, `workflow/`, `corrections/`
+Gather every candidate first:
 
-If you spot an EXISTING learning that should be updated:
-- Show the user the current version and proposed change
-- Update after approval
-
-**Direction-change corrections (from the handoff scratch):** the handoff's `## Do-Not-Redo` block (between its `<!-- HANDOFF:DONOTREDO:START -->` / `:END` markers) records the dead-ends and direction shifts of this effort — the clean, authoritative channel. For each line in that block that is not already in `5 Agent Memory/learnings/corrections/`:
+- **New patterns** (preference, workflow, technical, correction) not already captured. Subcategory: `preferences/`, `technical/`, `workflow/` or `corrections/`.
+- **Updates** to an existing learning that this session showed is wrong or incomplete.
+- **Direction-change corrections (from the handoff scratch):** the handoff's `## Do-Not-Redo` block (between its `<!-- HANDOFF:DONOTREDO:START -->` / `:END` markers) records the dead-ends and direction shifts of this effort — the clean, authoritative channel. A line counts as "new" when it isn't in the prior `.consumed` handoff's block (both were read in Step 2.5). For each new line not already in `5 Agent Memory/learnings/corrections/`:
 
 ```
 search vault for "<key phrase from the correction>"
 ```
 
-If genuinely new, propose it as a correction learning (needs the user's approval, per the rules). Once approved and written, `prompt-corrections.sh` will surface it in future sessions whenever a prompt touches that topic (its index is rebuilt at SessionStart). A correction counts as "new" when the current handoff's Do-Not-Redo lines differ from the prior `.consumed` handoff's.
+If none survive deduplication, skip to Step 5.
+
+**Approve with one multi-select.** Call `AskUserQuestion` once for the whole list, every question `multiSelect: true`:
+
+| Field | Value |
+|---|---|
+| question | "Which learnings should I save?" (add "(n of m)" when batched) |
+| header | `Learnings` |
+| option label | the learning's title, 5 words max |
+| option description | new: `<category>: <one-line gist>`; update: `update: <what changes>` |
+
+Each question takes 2–4 options and one call takes up to 4 questions, so:
+
+- **1 learning:** the API rejects a one-option question. Ask single-select instead, options `Save` (description as above) and `Drop`.
+- **2–16:** as few questions as needed, 2–4 options each (5 → 3 + 2, never 4 + 1).
+- **More than 16:** ask about the first 16 and write the rest, unapproved, to `working/` (agent-memory skill §5 naming, with frontmatter). Tell the user they're there.
+
+Then act on the answer:
+
+- **Selected:** write it to `learnings/<category>/` with `confidence: high` (agent-memory skill §4 frontmatter), or patch the existing note for an update.
+- **Not selected:** drop it, and don't propose it again this sync.
+- **"Other" text:** an edit to the learning it names; apply it if that learning was selected. If it names an unselected learning or none, ask one plain follow-up rather than guess.
+
+A standard sync and `--ingest` write learnings only through this prompt (`--dream` approves through its report). Once written, a correction is surfaced by `prompt-corrections.sh` whenever a later prompt touches that topic (its index is rebuilt at SessionStart).
 
 ### Step 5: Update Project Index
 
@@ -249,7 +265,7 @@ A fresh SessionStart resets `.session-meta`, so `synced=true` applies only to th
 
 Tell the user:
 - What was written and where
-- Any learnings proposed
+- Learnings written, and how many were dropped or left in `working/`
 - Any open items carried forward
 - Staging files cleaned up
 - Reminder of resumption state if applicable
@@ -278,7 +294,7 @@ Skip anything already captured in vault learnings or sessions.
 ### Step 3: Write New Items
 
 For each genuinely new item from auto-memory:
-- If it's a preference/pattern → propose as learning (needs the user's approval)
+- If it's a preference/pattern → propose as learning through the Standard Sync Step 4 multi-select
 - If it's a build command/debug insight → write to project session note
 - If it's architecture context → write to relevant project area
 

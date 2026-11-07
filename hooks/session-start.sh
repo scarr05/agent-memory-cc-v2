@@ -40,85 +40,6 @@ emit_context_and_exit() {
     exit 0
 }
 
-# --- Project slug detection (unchanged from v2) ---
-
-detect_slug() {
-    _DETECTED_VIA=""
-
-    # Priority 1: Existing CLAUDE.md metadata
-    if [[ -f "$CLAUDE_MD" ]]; then
-        local slug
-        slug=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1 || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="claude-md-metadata"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 1b: .claude/memory-state.json from prior session
-    if [[ -f ".claude/memory-state.json" ]]; then
-        local slug
-        slug=$(jq -r '.slug // empty' .claude/memory-state.json 2>/dev/null || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="memory-state-file"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 2: .claude/settings.json custom field
-    if [[ -f ".claude/settings.json" ]]; then
-        local slug
-        slug=$(jq -r '.memory.projectSlug // empty' .claude/settings.json 2>/dev/null || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="settings-json"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 3: Git remote
-    if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null 2>&1; then
-        local remote
-        remote=$(git remote get-url origin 2>/dev/null || true)
-        if [[ -n "$remote" ]]; then
-            local slug
-            slug=$(echo "$remote" | sed -E 's/.*[:/]([^/]+)\.git$/\1/' | sed -E 's/.*[:/]([^/]+)$/\1/' | tr '[:upper:]' '[:lower:]')
-            if [[ -n "$slug" ]]; then
-                _DETECTED_VIA="git-remote"
-                echo "$slug"
-                return 0
-            fi
-        fi
-    fi
-
-    # Priority 4: Project manifest name
-    if [[ -f "package.json" ]]; then
-        local slug
-        slug=$(jq -r '.name // empty' package.json 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="package-json"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    if [[ -f "pyproject.toml" ]]; then
-        local slug
-        slug=$(sed -n 's/.*name = "\([^"]*\)".*/\1/p' pyproject.toml 2>/dev/null | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' || true)
-        if [[ -n "$slug" ]]; then
-            _DETECTED_VIA="pyproject-toml"
-            echo "$slug"
-            return 0
-        fi
-    fi
-
-    # Priority 5: Directory name
-    _DETECTED_VIA="directory-name"
-    basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
-}
-
 detect_area() {
     if [[ -f "$CLAUDE_MD" ]]; then
         local area
@@ -139,14 +60,14 @@ STDIN_JSON=$(cat || true)
 SOURCE=$(printf '%s' "$STDIN_JSON" | jq -r '.source // "startup"' 2>/dev/null || echo "startup")
 TRANSCRIPT=$(printf '%s' "$STDIN_JSON" | jq -r '.transcript_path // empty' 2>/dev/null || true)
 
-_DETECTED_VIA=""
-SLUG=$(detect_slug)
-# Defence in depth: detect_slug does not charset-filter the state-file,
-# settings.json, or git-remote branches. Clamp to the slug charset so a crafted
-# slug can never traverse out of the staging dir (it becomes part of rm -rf /
-# mkdir paths) or inject extra key=value args into the Obsidian CLI.
-SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-[[ -z "$SLUG" ]] && SLUG="unknown"
+# The shared lookup: marker, state file, settings.json, the main checkout's
+# files for a linked worktree, remote, manifest, directory. It clamps SLUG to
+# [a-z0-9-] itself, since the slug becomes part of rm -rf / mkdir paths and
+# Obsidian CLI arguments. This hook writes the state file, so it never reads
+# its own earlier answer back: a wrong slug would otherwise stick for good.
+SLUG_IGNORE_STATE=1
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_slug; else SLUG="unknown"; _DETECTED_VIA="slug-lib-missing"; fi
 DETECTED_VIA="$_DETECTED_VIA"
 AREA=$(detect_area)
 # Clamp AREA to a safe label charset. It reaches the memory-state.json heredoc and

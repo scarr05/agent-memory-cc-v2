@@ -69,10 +69,12 @@ Check in order, stop at first hit:
 cat .claude/CLAUDE.md 2>/dev/null | grep 'memory:project-slug' || echo "none"
 ```
 
-### 1.4 Directory Name
+### 1.4 What the hooks resolve
+
+What the memory hooks resolve now (slug-lib.sh: the main checkout's name in a subfolder or linked worktree, so `noted/src` is `noted`):
 
 ```bash
-basename "$PWD"
+bash "$HOME/.claude/hooks/slug-lib.sh"
 ```
 
 ### 1.5 README

@@ -14,16 +14,13 @@ Capture where we are right now into a single-slot scratch file so a fresh sessio
 ## Step 1: Resolve slug, transcript, and library
 
 ```bash
-# Slug: CLAUDE.md metadata -> state file -> git remote -> dir name
-SLUG=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' .claude/CLAUDE.md 2>/dev/null | head -1)
-[[ -z "$SLUG" ]] && SLUG=$(jq -r '.slug // empty' .claude/memory-state.json 2>/dev/null || true)
-[[ -z "$SLUG" ]] && SLUG=$(git remote get-url origin 2>/dev/null | sed -E 's/.*[:/]([^/]+)\.git$/\1/' | sed -E 's/.*[:/]([^/]+)$/\1/' | tr '[:upper:]' '[:lower:]')
-[[ -z "$SLUG" ]] && SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g'); [[ -z "$SLUG" ]] && SLUG="unknown"
-
-# Library path: plugin root if present, else manual-install location
-LIB="$HOME/.claude/hooks/handoff-lib.sh"
-[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -f "${CLAUDE_PLUGIN_ROOT}/hooks/handoff-lib.sh" ]] && LIB="${CLAUDE_PLUGIN_ROOT}/hooks/handoff-lib.sh"
+# Slug: the lookup the memory hooks and relay-baton use (slug-lib.sh), so a
+# handoff from a linked worktree lands in the main checkout's staging dir.
+# Libraries: plugin root if present, else the manual-install location.
+HOOKS="$HOME/.claude/hooks"
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
+LIB="$HOOKS/handoff-lib.sh"
+SLUG=$(bash "$HOOKS/slug-lib.sh" 2>/dev/null || true); [[ -z "$SLUG" ]] && SLUG="unknown"
 
 STAGING="$HOME/.claude/memory-staging/$SLUG"
 HANDOFF="$STAGING/handoff.md"

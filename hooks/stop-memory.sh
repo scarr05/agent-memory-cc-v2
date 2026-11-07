@@ -12,24 +12,12 @@
 set -euo pipefail
 
 STAGING_DIR="$HOME/.claude/memory-staging"
-CLAUDE_MD=".claude/CLAUDE.md"
-STATE_FILE=".claude/memory-state.json"
 
-# --- Fast slug detection: state file first (sed, no jq), then minimal fallback ---
-SLUG=""
-if [[ -f "$STATE_FILE" ]]; then
-    SLUG=$(sed -n 's/.*"slug": *"\([^"]*\)".*/\1/p' "$STATE_FILE" 2>/dev/null | head -1)
-fi
-if [[ -z "$SLUG" ]] && [[ -f "$CLAUDE_MD" ]]; then
-    SLUG=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1)
-fi
-if [[ -z "$SLUG" ]]; then
-    SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-fi
-# Defence in depth: the state-file branch above is not charset-filtered. Clamp so
-# a crafted slug can't traverse out of the staging dir (it forms rm/mkdir paths).
-SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-[[ -z "$SLUG" ]] && SLUG="unknown"
+# --- Slug: the shared lookup (slug-lib.sh, beside this hook) ---
+# Without it the hook stages under "unknown" rather than guess a directory.
+LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_slug; else SLUG="unknown"; fi
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 META_FILE="$PROJECT_DIR/.session-meta"
@@ -109,7 +97,6 @@ MSG_NOW=$(sed -n 's/^message_count=\([0-9]*\).*/\1/p' "$META_FILE" | head -1); M
 if [[ "$MSG_NOW" -ge 8 ]] && ! grep -q '^handoff_nudge_sent=true' "$META_FILE" 2>/dev/null; then
     # Lazily source the library (function defs only; its CLI dispatcher is guarded by
     # BASH_SOURCE==$0) and read the Stop stdin payload — only now is the cost worth it.
-    LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     HANDOFF_LIB=0
     if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
         # shellcheck source=/dev/null

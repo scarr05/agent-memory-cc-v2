@@ -7,8 +7,6 @@
 set -euo pipefail
 
 STAGING_DIR="$HOME/.claude/memory-staging"
-CLAUDE_MD=".claude/CLAUDE.md"
-STATE_FILE=".claude/memory-state.json"
 
 # SessionEnd receives JSON on stdin: { reason, transcript_path }.
 # reason: clear | logout | prompt_input_exit | other. A `clear` is a deliberate
@@ -19,26 +17,11 @@ STATE_FILE=".claude/memory-state.json"
 STDIN_JSON=$(cat || true)
 REASON=$(printf '%s' "$STDIN_JSON" | jq -r '.reason // empty' 2>/dev/null || true)
 
-# --- Fast slug detection: state file (sed, no jq) -> CLAUDE.md -> dirname ---
-SLUG=""
-if [[ -f "$STATE_FILE" ]]; then
-    SLUG=$(sed -n 's/.*"slug": *"\([^"]*\)".*/\1/p' "$STATE_FILE" 2>/dev/null | head -1)
-fi
-if [[ -z "$SLUG" ]] && [[ -f "$CLAUDE_MD" ]]; then
-    SLUG=$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' "$CLAUDE_MD" 2>/dev/null | head -1)
-fi
-if [[ -z "$SLUG" ]]; then
-    SLUG=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
-fi
-# Defence in depth: the state-file/CLAUDE.md branches aren't charset-filtered.
-# Clamp so a crafted slug can't traverse out of the staging dir.
-if (( BASH_VERSINFO[0] >= 4 )); then
-    SLUG="${SLUG,,}"; SLUG="${SLUG//[^a-z0-9-]/}"   # builtins: zero forks on the hot path
-else
-    # bash 3.2 (macOS): ${var,,} is a runtime "bad substitution", so fork tr|sed instead.
-    SLUG=$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]//g')
-fi
-[[ -z "$SLUG" ]] && SLUG="unknown"
+# --- Slug: the shared lookup (slug-lib.sh, beside this hook) ---
+# Without it the hook stages under "unknown" rather than guess a directory.
+LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
+# shellcheck source=/dev/null
+if [[ -f "$LIBDIR/slug-lib.sh" ]]; then source "$LIBDIR/slug-lib.sh"; resolve_slug; else SLUG="unknown"; fi
 
 PROJECT_DIR="$STAGING_DIR/$SLUG"
 META_FILE="$PROJECT_DIR/.session-meta"
@@ -49,7 +32,6 @@ META_FILE="$PROJECT_DIR/.session-meta"
 # (logout/other) stays lean — this branch exits before the unsynced logic, so a
 # deliberate clear is never "unsynced".
 if [[ "$REASON" == "clear" ]]; then
-    LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     HANDOFF_LIB=0
     if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then
         # shellcheck source=/dev/null

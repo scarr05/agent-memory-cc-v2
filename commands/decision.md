@@ -28,19 +28,16 @@ Log a decision to this project's decisions log. $ARGUMENTS
 
 ## Step 1: Detect Project
 
-Read the project slug from `.claude/CLAUDE.md` metadata:
+Resolve the project slug with the lookup the memory hooks use (`slug-lib.sh`), so a decision logged from a linked worktree lands with the main checkout's project:
 
 ```bash
-sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' .claude/CLAUDE.md 2>/dev/null | head -1
+HOOKS="$HOME/.claude/hooks"
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
+SLUG=$(bash "$HOOKS/slug-lib.sh" 2>/dev/null || true)
+echo "SLUG=${SLUG:-<none>}"
 ```
 
-If no slug found, check git remote:
-
-```bash
-git remote get-url origin 2>/dev/null | sed -E 's/.*[:/]([^/]+)\.git$/\1/' | tr '[:upper:]' '[:lower:]'
-```
-
-If still no slug, ask the user which project this decision belongs to.
+If `SLUG` is `<none>` (the library isn't installed) or `unknown`, ask the user which project this decision belongs to.
 
 ## Step 2: Parse Arguments
 

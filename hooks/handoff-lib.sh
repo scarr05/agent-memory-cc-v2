@@ -223,28 +223,56 @@ build_deterministic_handoff() {
     return 0
 }
 
+# True when a narrative can't be armed: still the EXACT fill sentinel (the
+# collapsed comment, not a bare "HANDOFF:NARRATIVE" substring, so a real
+# narrative that merely mentions the token still arms) or under 40 characters.
+# Characters, not bytes, whatever locale the caller runs in: hooks get C.
+narrative_too_thin() {
+    local LC_ALL=C.UTF-8
+    local n="${1//[[:space:]]/}"
+    [[ "$n" == *"<!--HANDOFF:NARRATIVE-->"* || "${#n}" -lt 40 ]]
+}
+
 # Finalise a handoff: enforce the empty/thin guard for manual handoffs, stamp
 # supersedes from any prior consumed file. Prints ARMED:/ABORTED:. Returns
-# non-zero on abort. Args: --out OUT --consumed CONSUMED_FILE
+# non-zero on abort. Args: --out OUT --consumed CONSUMED_FILE [--narrative FILE]
+# --narrative first swaps FILE's text in as the NARRATIVE block (/wrap's
+# optimised brief). A thin text or a file with no block aborts with OUT untouched.
 finalize_handoff() {
-    local OUT="" CONSUMED=""
+    local OUT="" CONSUMED="" NARRATIVE=""
     while [[ $# -gt 0 ]]; do case "$1" in
         --out) OUT="$2"; shift 2;;
         --consumed) CONSUMED="$2"; shift 2;;
+        --narrative) NARRATIVE="$2"; shift 2;;
         *) shift;;
     esac; done
     [[ -f "$OUT" ]] || { echo "ABORTED: no handoff file at $OUT"; return 1; }
 
+    if [[ -n "$NARRATIVE" ]]; then
+        [[ -f "$NARRATIVE" ]] && ! narrative_too_thin "$(<"$NARRATIVE")" ||
+            { echo "ABORTED: the new narrative is missing or too thin — $OUT left as it was."; return 1; }
+        local tmp0; tmp0=$(mktemp "${OUT}.XXXXXX")
+        # One pass: copy OUT, replacing the lines between the NARRATIVE markers;
+        # no complete START..END pair means no rename.
+        awk -v bodyf="$NARRATIVE" '
+            { ln = $0; sub(/\r$/, "", ln) }
+            !done && ln == "<!-- HANDOFF:NARRATIVE:START -->" {
+                print ln
+                while ((getline l < bodyf) > 0) { sub(/\r$/, "", l); print l }
+                skip = 1; next
+            }
+            skip && ln == "<!-- HANDOFF:NARRATIVE:END -->" { skip = 0; done = 1 }
+            skip { next }
+            { print }
+            END { exit !done }
+        ' "$OUT" > "$tmp0" && mv "$tmp0" "$OUT" ||
+            { rm -f "$tmp0"; echo "ABORTED: no NARRATIVE block in $OUT — left as it was."; return 1; }
+    fi
+
     # source is a quoted scalar; tr strips the quotes AND any trailing CR (CRLF).
     local src; src=$(sed -n 's/^source: //p' "$OUT" | head -1 | tr -d '\r"')
     if [[ "$src" == "handoff" ]]; then
-        # Refuse to arm only if the narrative is still the EXACT fill sentinel
-        # (collapsed comment) or too thin — match the full collapsed comment, not a
-        # bare "HANDOFF:NARRATIVE" substring, so a real narrative that merely
-        # mentions the token still arms.
-        local narr
-        narr=$(extract_block NARRATIVE "$OUT" | tr -d '[:space:]')
-        if [[ "$narr" == *"<!--HANDOFF:NARRATIVE-->"* ]] || [[ "${#narr}" -lt 40 ]]; then
+        if narrative_too_thin "$(extract_block NARRATIVE "$OUT")"; then
             rm -f "$OUT"
             echo "ABORTED: handoff narrative not filled — not armed."
             return 1
