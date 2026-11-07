@@ -31,16 +31,15 @@ The project slug drives everything — where sessions get written, where context
 
 ### Detection Priority
 
-```
-1. .claude/CLAUDE.md → look for `project-slug:` in frontmatter/content
-1b. .claude/memory-state.json → slug written by a prior session (covers a branch
-    or worktree where the CLAUDE.md metadata is absent)
-2. .claude/settings.json → check for custom memory.projectSlug field
-3. git remote → extract repo name from origin URL
-4. package.json / pyproject.toml / Cargo.toml → extract project name
-5. Directory name → basename of $PWD
-6. Fallback → "unknown-project" (prompt user to set it)
-```
+1. `.claude/CLAUDE.md` — `<!-- memory:project-slug=X -->` HTML comment
+2. `.claude/memory-state.json` — slug from a prior session (SessionStart skips this, since it writes the file)
+3. `.claude/settings.json` — `memory.projectSlug` field
+4. A linked worktree with neither file: the main checkout's marker, then its state file
+5. Git remote origin — repo name extraction
+6. `package.json` / `pyproject.toml` — project name
+7. The main checkout's directory name in git (so `noted/src` or a linked worktree is `noted`), else the directory basename
+
+One implementation, `hooks/slug-lib.sh`: the hooks source it and call `resolve_slug`; the commands run `bash slug-lib.sh`, which prints the slug. Step 4 is what lets a session in a linked worktree (a Chief lead, say) land in the main checkout's staging folder and vault notes.
 
 ### Where the Slug Lives
 
@@ -260,6 +259,8 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 │   └── decision.md                        # /decision slash command
 ├── hooks/
 │   ├── handoff-lib.sh                     # Shared handoff library (sourced, not a hook)
+│   ├── slug-lib.sh                        # The slug lookup (sourced by hooks, run by commands)
+│   ├── state-lib.sh                       # Session/lead state paths and command flags
 │   ├── session-start.sh                   # SessionStart hook
 │   ├── pre-compact.sh                     # PreCompact hook (clears read-once cache)
 │   ├── stop-memory.sh                     # Stop hook
@@ -268,7 +269,12 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 │   └── read-once/hook.sh                  # PreToolUse hook
 ├── memory-staging/                        # Local staging for hook → MCP bridge
 │   └── my-project/
-│       ├── .session-meta                  # Message count, timestamps, synced flag
+│       ├── sessions/<session_id>/
+│       │   ├── .session-meta              # Turn count, nudges, synced/synced_at, handoff_at
+│       │   └── .transcript-path           # The /handoff breadcrumb for this session
+│       ├── leads/<worktree>/              # A Chief lead's slot: its own handoff.md,
+│       │                                  #   handoff.consumed.md, .unsynced, .last-session
+│       ├── .last-session                  # Sam's slot: newest session id
 │       ├── .corrections-index             # title|key index for UserPromptSubmit
 │       ├── .unsynced                      # written by SessionEnd, cleared by /memory-sync
 │       ├── handoff.md                     # Current-work-unit scratch (written by /handoff)
@@ -277,6 +283,24 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 ```
 
 Installed as a plugin, the hooks, agents, and commands live at the plugin root instead, registered via `hooks/hooks.json` and `.claude-plugin/plugin.json` with `${CLAUDE_PLUGIN_ROOT}` paths.
+
+### Session state and Chief leads
+
+Two sessions in one project (Sam in the main checkout, a Chief lead in a linked worktree) used to share every staging file: each SessionStart reset the other's `.session-meta`, and a lead's sync or `/clear` could consume Sam's armed `handoff.md`. `hooks/state-lib.sh` (from cc-chief #42 / PR #99) splits it:
+
+| State | Where |
+|---|---|
+| `.session-meta`, `.transcript-path` | `<slug>/sessions/<session_id>/`, keyed by the hook input's `session_id`. Folders untouched for 7 days are pruned at SessionStart |
+| `handoff.md`, `handoff.consumed.md`, `.unsynced`, `.last-session` | the slot: Sam's is `<slug>/`; a lead's (`CHIEF_LEAD=1`) is `<slug>/leads/<worktree>/` |
+| `.corrections-index`, `.vault-cache-*`, `.last-dream`, `.dream-pending` | `<slug>/`, shared |
+
+Hook input without a `session_id` (an older Claude Code, a hand run) keeps the old flat layout.
+
+The commands learn their session id from `${CLAUDE_SESSION_ID}`, which Claude Code substitutes in commands and skills. If it is empty, the slot's `.last-session` stands in, and `/handoff` refuses when more than one transcript in the project's transcript folder was written in the last two minutes.
+
+### `--auto`: no questions
+
+`/memory-sync` and `/handoff` take `--auto`, and a lead (`CHIEF_LEAD=1`) is always auto. Flags are parsed by `state-lib.sh args`, which refuses ones it does not know. Each command has an "Auto mode" table naming what replaces every question or stop. Learnings from an auto sync are written to `sessions/by-project/<slug>/proposed-learnings/` with `source: lead` and `auto: true`, never to `learnings/`, so nothing reaches the curated learnings without Sam's approval. Both commands mark the session (`synced_at`, `handoff_at`) in its `.session-meta`.
 
 ---
 
