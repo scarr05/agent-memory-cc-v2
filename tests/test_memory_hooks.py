@@ -463,3 +463,12 @@ def test_commands_ask_nothing_in_auto_mode():
     handoff = (CONTRIB / "commands" / "handoff.md").read_text(encoding="utf-8")
     assert "## Auto mode" in handoff
     assert "state-lib.sh\" args handoff" in handoff and "state-lib.sh\" args memory-sync" in sync
+
+
+def test_commands_inline_the_decisions_template():
+    """config/ is not installed beside the commands, so each command that creates
+    _decisions.md carries the template; this keeps the copies equal to the source."""
+    template = (CONTRIB / "config" / "decisions-template.md").read_text(encoding="utf-8").strip()
+    for name in ("decision.md", "memory-sync.md", "memory-init.md"):
+        text = (CONTRIB / "commands" / name).read_text(encoding="utf-8")
+        assert "```markdown\n" + template + "\n```" in text, name

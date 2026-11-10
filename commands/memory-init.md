@@ -74,7 +74,9 @@ cat .claude/CLAUDE.md 2>/dev/null | grep 'memory:project-slug' || echo "none"
 What the memory hooks resolve now (slug-lib.sh: the main checkout's name in a subfolder or linked worktree, so `noted/src` is `noted`):
 
 ```bash
-bash "$HOME/.claude/hooks/slug-lib.sh"
+HOOKS="$HOME/.claude/hooks"
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
+bash "$HOOKS/slug-lib.sh"
 ```
 
 ### 1.5 README
@@ -233,7 +235,7 @@ This ensures the state file exists immediately, rather than waiting for the next
 
 ## Phase 4: Create Obsidian Structure
 
-Via MCP-Obsidian:
+Via the Obsidian MCP server:
 
 ### 4.1 Session Folder
 
@@ -279,7 +281,12 @@ Read `5 Agent Memory/project-index.md`.
 If project exists in the table → update the row.
 If project doesn't exist → add a new row.
 
-If `project-index.md` doesn't exist → create it using the template from the architecture docs.
+If `project-index.md` doesn't exist → create it with frontmatter (`title`, `created`, `type: index`) and an `## Active Projects` table with these columns (the repo's `docs/project-index-template.md`):
+
+```markdown
+| Project | Slug | Vault Path | Area | Last Session | Status | Key Decisions |
+|---------|------|-----------|------|--------------|--------|---------------|
+```
 
 ## Phase 4.5: Decisions Log Setup
 
@@ -306,9 +313,25 @@ For each session note that has a `decisions:` frontmatter array, collect the dec
 
 If sessions with decisions were found:
 
-1. Build the proposed `_decisions.md` content:
-   - Frontmatter with `type: decisions`
-   - One entry per decision, formatted as:
+1. Build the proposed `_decisions.md` content: the template below (the repo's `config/decisions-template.md`, with `<Display Name>`, `<slug>` and `<date>` replaced), then one entry per decision.
+
+```markdown
+---
+title: "Decisions — <Display Name>"
+type: decisions
+project: "<slug>"
+created: <date>
+modified: <date>
+---
+
+# Decisions — <Display Name>
+
+Append-only log of significant decisions for this project. Each entry includes context, rationale, and a source link back to the session or conversation where the decision was made.
+
+<!-- Entries are appended below this line. Do not reorder or rewrite existing entries. -->
+```
+
+   Each entry is formatted as:
 
 ```markdown
 ### <session-date> — <Decision Title>
@@ -336,7 +359,7 @@ Found <N> decisions across <M> sessions. Proposed _decisions.md:
 write note "5 Agent Memory/sessions/by-project/<slug>/_decisions.md" with <content>
 ```
 
-If no existing sessions have decisions, create an empty `_decisions.md` with frontmatter only — ready for the first `/memory-sync` or `/decision` to populate.
+If no existing sessions have decisions, create `_decisions.md` from the template above with no entries — ready for the first `/memory-sync` or `/decision` to populate.
 
 ## Phase 4.6: Codebase Analysis
 
@@ -355,7 +378,7 @@ Analyse this codebase's structure. Report:
 - Module boundaries and how code is organised
 - Any monorepo or workspace structure
 
-Use Glob to find files by pattern, Read to examine key files, and LS to understand directory layout. Keep your report to 10-15 lines maximum. Focus on what a new developer needs to orient themselves.
+Use Glob to find files by pattern and understand the directory layout, and Read to examine key files. Keep your report to 10-15 lines maximum. Focus on what a new developer needs to orient themselves.
 ```
 
 **Subagent 2: Patterns**

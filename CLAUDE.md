@@ -8,13 +8,13 @@ A hook-enforced persistent memory system for Claude Code. It extends Claude Code
 
 ## Architecture
 
-### Three-Tier Design
+### Three-Layer Design
 
 1. **Hooks (deterministic, shell scripts)** — fire automatically on Claude Code events
-2. **Local staging (`~/.claude/memory-staging/<slug>/`)** — ephemeral bridge between hooks and MCP
+2. **Local staging (`~/.claude/memory-staging/<slug>/`)** — ephemeral hook state: handoff scratch, per-session counters, flags
 3. **Obsidian vault (`5 Agent Memory/`)** — structured, permanent, cross-project storage
 
-Hooks cannot call MCP directly. They write to local staging files and inject `additionalContext` via JSON stdout. Claude reads staging files and pushes content to Obsidian via the Obsidian MCP server.
+Hooks cannot call MCP. They keep their state in local staging (handoff scratch, per-session counters, flags) and inject context via JSON stdout; `/memory-sync` writes the vault note through the Obsidian MCP server and clears the handoff scratch.
 
 ### Hook Scripts
 
@@ -22,10 +22,10 @@ Six hooks fire on Claude Code lifecycle events:
 
 | Script | Event | Purpose | Budget |
 |--------|-------|---------|--------|
-| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, flag a pending handoff + unsynced sessions, run the post-compaction handoff | warm ≤300ms / cold ≤3s |
+| `session-start.sh` | SessionStart | Detect slug, inject prior-context pointer, inject an armed handoff after `/clear`, flag unsynced sessions, check the 24h dream timer (startup/resume), run the post-compaction handoff | warm ≤300ms / cold ≤3s |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads | — |
 | `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired) | ≤100ms |
-| `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min, check 24hr dream timer | ≤50ms |
+| `stop-memory.sh` | Stop | Increment counter, nudge at 15/30 messages or 45+ min, nudge once for `/handoff` at the token threshold (`memory.handoffTokenThreshold`, default 150000) | ≤50ms |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` | ≤100ms |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic | ≤100ms |
 
@@ -34,7 +34,8 @@ Six hooks fire on Claude Code lifecycle events:
 | File | Command | Purpose |
 |------|---------|---------|
 | `memory-init.md` | `/memory-init` | One-time project setup: detect stack, create CLAUDE.md metadata, set up Obsidian folders, load prior context. Includes decisions log setup (Phase 4.5) and optional codebase analysis (Phase 4.6) |
-| `memory-sync.md` | `/memory-sync` | End-of-session: write session note, append to decisions log, propose learnings, clean staging. Supports `--dream`, `--ingest`, `--tidy`, `--status` flags |
+| `memory-sync.md` | `/memory-sync` | End-of-session: write session note, append to decisions log, choose and save learnings (the agent decides, and reports what it saved), clean staging. Supports `--dream`, `--ingest`, `--tidy`, `--status` flags |
+| `memory-load.md` | `/memory-load` | Restore hook-level context from `.claude/memory-state.json`, then delegate the vault search to memberberry |
 | `handoff.md` | `/handoff` | Capture the current work unit into a handoff scratch file before `/clear`; the next session auto-loads it |
 | `decision.md` | `/decision` | Ad-hoc decision logging to `_decisions.md` without full session sync |
 
@@ -60,7 +61,7 @@ Each hook emits the channel Claude Code actually reads for that event (corrected
 |------|---------|
 | SessionStart, UserPromptSubmit | `hookSpecificOutput.additionalContext` (a string Claude sees); plain stdout is a documented fallback via `MEMORY_HOOK_PLAINTEXT=1` |
 | Stop | `systemMessage` (shown to the user, not Claude) — the correct nudge channel |
-| PreToolUse (read-once) | `hookSpecificOutput.permissionDecision` (`allow` / `deny` / `ask`) |
+| PreToolUse (read-once) | `hookSpecificOutput.permissionDecision` (`allow` / `deny`) |
 | PreCompact | emits nothing — clears the read-once cache only; the post-compaction handoff comes from SessionStart with `source=compact` |
 | SessionEnd | side-effect only (writes `.unsynced`); receives `reason` on stdin, cannot inject |
 
@@ -93,7 +94,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - `config/global-claude-md-v2.md` — Global CLAUDE.md with preferences, memory rules, MCP tool list, and vault structure
 - `commands/handoff.md` — `/handoff` command: captures the current work unit into a handoff scratch file before `/clear`
 - `docs/hooks-architecture.md` — System design document explaining the hook-MCP bridge pattern, detection logic, and interaction flows
-- `docs/setup-guide-v4.md` — v4 installation (plugin + manual); `docs/setup-guide-v2.md` is the older manual-only guide
+- `docs/setup-guide-v4.md` — v4 installation (plugin + manual) and troubleshooting
 - `config/settings.json` — Hook registration config for `~/.claude/settings.json`
 
 ## Conventions
@@ -101,7 +102,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - All bash scripts use `set -euo pipefail`
 - **Hooks must run on bash 3.2 + BSD userland (macOS) and bash 4+/GNU (Git Bash, WSL).** No `${var,,}`, `declare -A`, or `mapfile`; no `sed -i EXPR FILE`, `grep -oP`, or bare `sha1sum`. Portable idioms already in the repo: `tr '[:upper:]' '[:lower:]' | sed` for case folding, `sed` to a temp + `mv` for in-place edits, `sha1sum || shasum -a 1`. Note `bash -n` does **not** catch a bash-4 expansion — it is a runtime error, so always execute the hook, not just parse it. One codebase for both platforms: gate bash-4 builtins on `BASH_VERSINFO[0] -ge 4` with a bash-3.2 fallback branch rather than forking a per-OS copy. Any hook change must pass `tests/hook-validation.sh` on both a Windows Git Bash and a macOS machine before merge
 - Slug detection lives in `hooks/slug-lib.sh` only. Hooks source it from beside themselves and fall back to the slug `unknown` if it is missing, so a partial install degrades rather than guesses
-- `--auto` (always on when `CHIEF_LEAD=1`) means the command asks nothing. Learnings from an auto sync go to `sessions/by-project/<slug>/proposed-learnings/`, never `learnings/`
+- `--auto` (always on when `CHIEF_LEAD=1`) means the command asks nothing. Learnings from an auto sync go to `sessions/by-project/<slug>/proposed-learnings/`, never `learnings/`. In an attended sync the agent chooses which learnings to save and writes them to `learnings/` without asking
 - Memory metadata in project CLAUDE.md files uses HTML comments (`<!-- memory:key=value -->`) for invisibility in rendered markdown
 - Obsidian notes must always include YAML frontmatter
 - British English spelling throughout (organisation, colour, behaviour)
@@ -110,7 +111,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 
 Semi-automated test suite in `tests/`:
 - **Tier 1 (scripted):** `HOOKS_DIR=./hooks bash tests/hook-validation.sh /path/to/project [expected-slug]` — validates hook outputs and captures metrics. `HOOKS_DIR` defaults to `~/.claude/hooks`, so without it you test the installed copy, not the repo code
-- **Harness (scripted):** `uv run --no-project --with pytest pytest tests/test_memory_hooks.py -q` — runs the hooks and the commands' bash blocks against a temp `HOME` (never `~/.claude` or the vault). About four minutes on Windows. Ported from cc-chief #99
+- **Harness (scripted):** `uv run --no-project --with pytest pytest tests/test_memory_hooks.py -q` — runs the hooks and the commands' bash blocks against a temp `HOME` (never `~/.claude` or the vault). About seven minutes on Windows. Ported from cc-chief #99
 - **Handoff library:** `bash tests/handoff-lib-test.sh`
 - **Tier 2-3 (manual):** Follow `tests/playbook.md` for session-level testing
 - **Results:** `tests/results/baseline-YYYY-MM-DD.md` (gitignored)

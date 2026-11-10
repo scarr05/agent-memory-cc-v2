@@ -7,7 +7,7 @@
 #
 # Sourcing contract: callers `source` this file and guard every call on the
 # library being present, e.g.
-#   LIBDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+#   LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
 #   if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1; else HANDOFF_LIB=0; fi
 # so a partial install degrades to a no-op rather than crashing the hook.
 

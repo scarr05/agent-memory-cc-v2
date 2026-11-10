@@ -69,9 +69,25 @@ If the decision is already logged (same topic), tell the user and ask if they wa
 
 ## Step 4: Write Entry
 
-If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders with the actual values.
+If `_decisions.md` doesn't exist, create it with this content (the repo's `config/decisions-template.md`), replacing `<Display Name>`, `<slug>`, and `<date>` with the actual values:
 
-Append the new entry (patch under the `## Decisions` heading if the server supports structural patch, else plain append):
+```markdown
+---
+title: "Decisions — <Display Name>"
+type: decisions
+project: "<slug>"
+created: <date>
+modified: <date>
+---
+
+# Decisions — <Display Name>
+
+Append-only log of significant decisions for this project. Each entry includes context, rationale, and a source link back to the session or conversation where the decision was made.
+
+<!-- Entries are appended below this line. Do not reorder or rewrite existing entries. -->
+```
+
+Append the new entry at the end of the note (plain append: the template has no section headings to patch under):
 
 ```markdown
 

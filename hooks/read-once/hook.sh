@@ -31,30 +31,42 @@ if ! [[ "$TTL" =~ ^[0-9]+$ ]] || ! [[ "$DIFF_MAX" =~ ^[0-9]+$ ]]; then
     exit 0
 fi
 
-# --- Cache setup ---
-CACHE_DIR="$HOME/.claude/read-once/cache"
-SESSION_ID=$(echo "${CLAUDE_SESSION_ID:-$$}" | tr -cd 'A-Za-z0-9_-')
-SESSION_CACHE="$CACHE_DIR/$SESSION_ID"
-mkdir -p "$SESSION_CACHE"
-
-# Auto-clean old session caches (>24h)
-find "$CACHE_DIR" -maxdepth 1 -mindepth 1 -type d -mmin +1440 -exec rm -rf {} \; 2>/dev/null || true
-
 # --- Parse input ---
-INPUT=$(cat)
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null || true)
+# One jq for every field (this runs before every Read). Fields are joined with
+# the unit separator, not a tab: tab is IFS whitespace, so `read` would collapse
+# adjacent empty fields. file_path is last so nothing in a path can shift the rest.
+PARSED=$(jq -r '[.tool_name // "", .session_id // "",
+                 (.tool_input.offset // "" | tostring),
+                 (.tool_input.limit  // "" | tostring),
+                 .tool_input.file_path // ""] | join("\u001f")' 2>/dev/null || true)
+IFS=$'\037' read -r TOOL_NAME SESSION_ID HAS_OFFSET HAS_LIMIT FILE_PATH <<EOT || true
+$PARSED
+EOT
+FILE_PATH="${FILE_PATH%$'\r'}"   # a native Windows jq may emit CRLF
 
 # Only intercept Read tool
 [[ "$TOOL_NAME" != "Read" ]] && exit 0
-
-FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null || true)
 [[ -z "$FILE_PATH" ]] && exit 0
 
 # Skip partial reads (offset/limit present) — different content each time
-HAS_OFFSET=$(echo "$INPUT" | jq -r '.tool_input.offset // empty' 2>/dev/null || true)
-HAS_LIMIT=$(echo "$INPUT" | jq -r '.tool_input.limit // empty' 2>/dev/null || true)
 if [[ -n "$HAS_OFFSET" ]] || [[ -n "$HAS_LIMIT" ]]; then
     exit 0
+fi
+
+# --- Cache setup ---
+# The session is the hook input's session_id; CLAUDE_SESSION_ID is a fallback
+# for a Claude Code that sets it (hooks are not promised the variable). With
+# neither there is nothing stable to key on, so the read is allowed uncached.
+# pre-compact.sh clears this folder by the same id, clamped the same way.
+CACHE_DIR="$HOME/.claude/read-once/cache"
+SESSION_ID="${SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+SESSION_ID="${SESSION_ID//[^A-Za-z0-9_-]/}"
+[[ -z "$SESSION_ID" ]] && exit 0
+SESSION_CACHE="$CACHE_DIR/$SESSION_ID"
+if [[ ! -d "$SESSION_CACHE" ]]; then
+    mkdir -p "$SESSION_CACHE"
+    # Auto-clean old session caches (>24h): once per session, not once per Read
+    find "$CACHE_DIR" -maxdepth 1 -mindepth 1 -type d -mmin +1440 -exec rm -rf {} \; 2>/dev/null || true
 fi
 
 # --- Cache key ---
@@ -90,8 +102,8 @@ fi
 
 # --- Check cache ---
 if [[ -f "$CACHE_FILE" ]]; then
-    CACHED_MTIME=$(sed -n '1p' "$CACHE_FILE")
-    CACHED_TIME=$(sed -n '2p' "$CACHE_FILE")
+    CACHED_MTIME=""; CACHED_TIME=""
+    { IFS= read -r CACHED_MTIME; IFS= read -r CACHED_TIME; } < "$CACHE_FILE" || true
     NOW=$(date +%s)
 
     # Guard against empty cached values

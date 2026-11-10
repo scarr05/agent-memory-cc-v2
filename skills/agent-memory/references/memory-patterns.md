@@ -91,7 +91,7 @@ To continue: [what to read/know to pick this up fresh]
 
 ### Long Conversation Checkpoint
 
-Written proactively before compaction, or triggered by PreCompact hook.
+Written on an explicit "save progress" request.
 
 ```markdown
 ---
@@ -166,37 +166,6 @@ source_agent: "claude-code"
 ## Lessons
 [What to remember for similar situations]
 ```
-
----
-
-## Staging Checkpoint Template
-
-Written by PreCompact hook to `~/.claude/memory-staging/<slug>/checkpoint-YYYY-MM-DD.md`.
-The agent fills in the `[To be filled]` sections and then pushes to Obsidian `working/`.
-
-```markdown
----
-type: checkpoint
-project-slug: [slug]
-created: YYYY-MM-DDTHH:MM:SSZ
-session-start: YYYY-MM-DDTHH:MM:SSZ
-messages-before-compact: [N]
-status: pending
----
-
-## Pre-Compaction Checkpoint
-
-## Session State
-[Fill: summarise decisions, progress, current state]
-
-## Key Files Modified
-[Fill: list files changed this session]
-
-## Next Steps
-[Fill: what was about to happen before compaction]
-```
-
-After filling in and writing to Obsidian, delete the staging file.
 
 ---
 
@@ -447,7 +416,7 @@ search vault frontmatter for source_agent == "claude.ai"
 - `planning` — Spec/planning phase
 - `implementation` — Building phase
 - `review` — Review/feedback phase
-- `checkpoint` — Mid-session save (manual or hook-triggered)
+- `checkpoint` — Mid-session save (manual)
 - `u-turn` — Direction change
 - `decision` — Contains key decisions
 
@@ -459,5 +428,5 @@ search vault frontmatter for source_agent == "claude.ai"
 
 ### Project/Area Tags
 Use consistent names matching folder structure:
-- Projects: `brightsolid`, `druva`, `personal`, `blog`
+- Projects: `<client-or-employer>`, `personal`, `blog`
 - Areas: `aws`, `azure`, `ai`, `finops`, `devops`

@@ -3,6 +3,12 @@ description: "Load relevant context from Obsidian vault for the current project.
 allowed-tools:
   - "Agent"
   - "Bash"
+  - "mcp__obsidian__read_note"
+  - "mcp__obsidian__search_notes"
+  - "mcp__obsidian__get_frontmatter"
+  - "mcp__obsidian__list_directory"
+  - "mcp__obsidian__read_multiple_notes"
+  - "mcp__obsidian__get_notes_info"
   - "mcp__obsidian__vault_read"
   - "mcp__obsidian__search_simple"
   - "mcp__obsidian__vault_list"
@@ -38,11 +44,16 @@ If the state file exists, use its values:
 - `sessionPath` → where to find sessions
 - `dreamPending` → whether to nudge for dream consolidation
 
-If the state file does NOT exist, fall back to detecting the slug:
-1. Check `.claude/CLAUDE.md` for `<!-- memory:project-slug=X -->`
-2. Check git remote origin
-3. Use directory name
-Warn the user: "State file missing — using auto-detected slug. Consider running `/memory-init` to set up properly."
+If the state file does NOT exist, resolve the slug with the lookup the memory hooks use (`slug-lib.sh`):
+
+```bash
+HOOKS="$HOME/.claude/hooks"
+[[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
+SLUG=$(bash "$HOOKS/slug-lib.sh" 2>/dev/null || true)
+echo "SLUG=${SLUG:-<none>}"
+```
+
+If `SLUG` is `<none>` (the library isn't installed), use the directory name. Warn the user: "State file missing — using auto-detected slug. Consider running `/memory-init` to set up properly."
 
 #### 0.2 Check Pending Handoff
 
