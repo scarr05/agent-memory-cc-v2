@@ -40,6 +40,13 @@ obsidian search:context query="<text>" path="<folder>" format=json limit=<n>
 Returns JSON array of `{file, matches: [{line, text}]}`. Use to assess
 relevance without loading full notes.
 
+**Query gotchas** (both `search` and `search:context`, checked on CLI 1.14.5):
+- `path=` limits to a folder, not a single file. For one file, put the
+  `path:` operator inside the query: `query='<text> path:"<file>"'`.
+- A word followed by a colon is read as a search operator, so
+  `query="type: session"` fails with `Operator "type" not recognized`.
+  Quote it as a phrase inside the query: `query='"type: session"'`.
+
 ## Property Commands
 
 ### property:read — Read frontmatter field
@@ -111,7 +118,9 @@ obsidian tasks path="<file>" todo format=json
 ```
 
 **Important:** Requires a file path, not a folder path. To find tasks
-across a folder, use `search:context query="- [ ]" path="<folder>"`.
+across a folder, use `search:context query='"- [ ]"' path="<folder>"` (the
+phrase must be quoted inside the query; bare `- [ ]` returns files with
+empty matches).
 
 ## Tag Commands
 

@@ -54,7 +54,24 @@ _slugify() {
 }
 
 # The main checkout of the linked worktree we're in; empty in a main checkout or outside git.
+# Cached for the process: the slug lookup and slug_marker both ask, and the
+# fallback below forks git.
+_SLUG_MAIN=""; _SLUG_MAIN_SET=""
 _slug_main_checkout() {
+    [[ -n "$_SLUG_MAIN_SET" ]] || { _slug_main_checkout_uncached; _SLUG_MAIN="$_found"; _SLUG_MAIN_SET=1; }
+    _found="$_SLUG_MAIN"
+}
+
+# Sets _found to the first group of regex $1 in this checkout's .claude/CLAUDE.md,
+# else in the main checkout's (a linked worktree or subfolder with no marker of
+# its own); false when neither has it. The order step 1 and step 4 below follow.
+slug_marker() {
+    _slug_read .claude/CLAUDE.md "$1" && return 0
+    _slug_main_checkout
+    [[ -n "$_found" ]] && _slug_read "$_found/.claude/CLAUDE.md" "$1"
+}
+
+_slug_main_checkout_uncached() {
     local gitfile=""
     _found=""
     if [[ -f .git ]]; then

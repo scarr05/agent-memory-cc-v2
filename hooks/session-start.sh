@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session-start.sh — SessionStart hook for memory system (v3)
+# session-start.sh — SessionStart hook for memory system
 # Uses Obsidian CLI for vault reads, directs agent to subagents
 # Falls back gracefully if CLI unavailable
 
@@ -26,7 +26,7 @@ fi
 # half-built payload — the full path and this script's compact/clear branch
 # (Task 4) both call it the same way, with their context fully assembled.
 emit_context_and_exit() {
-    local ctx="$1"
+    local ctx="$1${CONTEXT_FOOTER:-}"
     local out="${ctx//\\n/$'\n'}"          # expand only the \n we control; leave \t \r etc literal
     # No jq => degrade to the documented plaintext channel rather than dying
     # having injected nothing (this is the highest-value hook).
@@ -77,13 +77,18 @@ AREA=$(detect_area)
 AREA=$(printf '%s' "$AREA" | tr -dc 'A-Za-z0-9 _-' | head -c 64)
 
 # Where each kind of state lives (state-lib.sh): PROJECT_DIR for the project,
-# SLOT_DIR for what this line of work hands its next session (Sam's is
-# PROJECT_DIR itself, a lead's is leads/<worktree>), SESSION_DIR for this
-# session alone, keyed by the hook input's session_id. Without the library, or
-# without a session id, all three are the project folder, as before.
-SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+# SLOT_DIR for what a session hands its next one (the project folder itself),
+# SESSION_DIR for this session alone, keyed by the hook input's session_id.
+# Without the library, or without a session id, all three are the project
+# folder, as before. PROJECT_AUTO=1 when the project opts into auto memory.
+SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"; PROJECT_AUTO=0
 # shellcheck source=/dev/null
-if [[ -f "$LIBDIR/state-lib.sh" ]]; then source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; fi
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then
+    source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; state_project_auto
+fi
+# Appended to every context, fast path or full, by emit_context_and_exit.
+CONTEXT_FOOTER=""
+[[ "$PROJECT_AUTO" == "1" ]] && CONTEXT_FOOTER="\\n→ **Auto memory is on** (\`memory:auto=true\`): you manage this project's memory. Run \`/memory-sync\` yourself when a unit of work is done, and \`/handoff\` when context runs short; both run without questions and save learnings directly.\\n"
 
 # Ensure staging directories exist
 mkdir -p "$SLOT_DIR" "$SESSION_DIR"
@@ -94,14 +99,9 @@ if [[ -n "${TRANSCRIPT:-}" ]]; then
     printf '%s\n' "$TRANSCRIPT" > "$SESSION_DIR/.transcript-path" 2>/dev/null || true
 fi
 
-# Checkpoint stubs are retired (replaced by the handoff scratch). Keep the field
-# in the state file as an empty array for backward compatibility.
-PENDING_CHECKPOINTS=()
-
 # Capture the prior session's meta BEFORE the full path resets it. PRIOR_COUNT
 # feeds both the dream timer and the "previous session" hint further down. The
-# prior session is the slot's last one (.last-session), so a lead starting in
-# between never stands in for Sam's previous session, or the other way round.
+# prior session is the project's last one (.last-session).
 PRIOR_SESSION_INFO=""
 PRIOR_META="$SLOT_DIR/.session-meta"
 if [[ -n "$SESSION_ID" ]]; then
@@ -229,7 +229,6 @@ fi
 STATE_FILE=".claude/memory-state.json"
 mkdir -p .claude
 
-CHECKPOINT_JSON="[]"
 
 DREAM_PENDING="false"
 if [[ -f "$PROJECT_DIR/.dream-pending" ]]; then
@@ -242,7 +241,7 @@ cat > "$STATE_FILE" << STATEJSON
   "area": "$AREA",
   "sessionPath": "5 Agent Memory/sessions/by-project/$SLUG/",
   "detectedVia": "$DETECTED_VIA",
-  "pendingCheckpoints": $CHECKPOINT_JSON,
+  "pendingCheckpoints": [],
   "dreamPending": $DREAM_PENDING,
   "lastUpdated": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -303,9 +302,9 @@ if command -v git &>/dev/null && git rev-parse --is-inside-work-tree &>/dev/null
         CONTEXT+=" (clean)"
     fi
     CONTEXT+="\\n"
-    RECENT=$(git log --oneline -3 2>/dev/null || true)
+    RECENT=$(git log --oneline -1 2>/dev/null || true)
     if [[ -n "$RECENT" ]]; then
-        CONTEXT+="Recent: $(echo "$RECENT" | head -1)\\n"
+        CONTEXT+="Recent: $RECENT\\n"
     fi
 else
     CONTEXT+="Not a git repo.\\n"
@@ -357,17 +356,31 @@ if [[ "$CLI_OK" == "true" ]]; then
         rm -rf "$SS_TMP" 2>/dev/null || true
         mkdir -p "$SS_TMP"
 
-        # Each job marks .ok ONLY on a zero-exit query (the .done marker fires
-        # unconditionally for the watchdog). A failed query writes an empty file
-        # but no .ok, so the cache write below can refuse to persist a partial.
+        # Each job marks .ok ONLY on a query that worked (the .done marker fires
+        # unconditionally for the watchdog). The CLI exits 0 even when it rejects
+        # a query, printing `Error: ...` instead of results, so exit status alone
+        # would cache a confidently-empty fragment the next time the CLI's query
+        # syntax shifts: the first line of output is checked too.
+        # Query forms the CLI needs (checked against 1.14.5): `path=` limits to a
+        # FOLDER, so the one-file index lookup adds the `path:` operator inside
+        # the query; `- [ ]` and `type: session` go in as quoted phrases, since
+        # bare they match nothing or fail with `Operator "type" not recognized`.
+        vault_query() { # $1=name, the rest are CLI arguments
+            local name="$1" first=""; shift
+            if "$OBS" "$@" format=json > "$SS_TMP/$name" 2>/dev/null; then
+                IFS= read -r first < "$SS_TMP/$name" || true
+                [[ "$first" == Error* ]] || touch "$SS_TMP/$name.ok"
+            fi
+            touch "$SS_TMP/$name.done"
+        }
         PIDS=()
-        { "$OBS" search:context query="$SLUG" path="5 Agent Memory/project-index.md" format=json > "$SS_TMP/index" 2>/dev/null && touch "$SS_TMP/index.ok"; touch "$SS_TMP/index.done"; } &
+        vault_query index search:context query="$SLUG path:\"5 Agent Memory/project-index.md\"" path="5 Agent Memory" &
         PIDS+=($!)
-        { "$OBS" search:context query="- \[ \]" path="5 Agent Memory/sessions/by-project/$SLUG" format=json limit=5 > "$SS_TMP/tasks" 2>/dev/null && touch "$SS_TMP/tasks.ok"; touch "$SS_TMP/tasks.done"; } &
+        vault_query tasks search:context query='"- [ ]"' path="5 Agent Memory/sessions/by-project/$SLUG" limit=5 &
         PIDS+=($!)
-        { "$OBS" search query="$SLUG" path="5 Agent Memory/working" format=json > "$SS_TMP/working" 2>/dev/null && touch "$SS_TMP/working.ok"; touch "$SS_TMP/working.done"; } &
+        vault_query working search query="$SLUG" path="5 Agent Memory/working" &
         PIDS+=($!)
-        { "$OBS" search query="type: session" path="5 Agent Memory/sessions/by-project/$SLUG" format=json > "$SS_TMP/depth" 2>/dev/null && touch "$SS_TMP/depth.ok"; touch "$SS_TMP/depth.done"; } &
+        vault_query depth search query='"type: session"' path="5 Agent Memory/sessions/by-project/$SLUG" &
         PIDS+=($!)
 
         # Watchdog: poll completion markers up to ~3s. Marker presence (not
@@ -428,6 +441,9 @@ if [[ "$CLI_OK" == "true" ]]; then
             done
             if [[ "$ALL_OK" == "1" ]]; then
                 printf '%s' "$VAULT_FRAGMENT" > "$CACHE_FILE.tmp.$$" 2>/dev/null && mv "$CACHE_FILE.tmp.$$" "$CACHE_FILE" 2>/dev/null || true
+            else
+                # Say so rather than show a partial as if it were the whole picture.
+                VAULT_FRAGMENT+="⚠ A vault query failed — the status above may be incomplete. Use memberberry for detail.\\n\\n"
             fi
         fi
         rm -rf "$SS_TMP" 2>/dev/null || true

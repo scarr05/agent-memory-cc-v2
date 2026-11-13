@@ -4,6 +4,22 @@
 
 CLAUDE.md instructions are advisory — the model can ignore them, especially after compaction or in long sessions where context drift kicks in. Hooks are deterministic. They fire every time, regardless of what the model decides to do.
 
+## Design Principles and Memory Tiers
+
+1. **Agents shouldn't need reminding** — hooks and the global CLAUDE.md force memory behaviour in every project.
+2. **Three tiers, one brain** — session memory flows up to project memory, project memory flows up to the vault.
+3. **Any agent, same context** — the Obsidian vault is the single source of truth, readable by any agent that can reach the files or an MCP server (the Codex adapter reads them directly).
+4. **Agents curate, the user can veto** — the agent chooses which learnings to save and reports them; an auto sync marks what it saved `auto: true`, and `--dream` checks those for accuracy.
+5. **Token-conscious** — load what is relevant to the task, not everything.
+
+| Tier | What | Where | Lifespan |
+|------|------|-------|----------|
+| 1 — Hot (session) | The active context window and scratch | Context window, `5 Agent Memory/working/` | One session; `/handoff` carries it across `/clear` |
+| 2 — Warm (project) | Claude Code auto-memory and the project CLAUDE.md | `~/.claude/projects/<project>/memory/`, `.claude/CLAUDE.md` | Across sessions, per project, per machine |
+| 3 — Cold (vault) | Sessions, decisions, learnings | `5 Agent Memory/` in the vault | Permanent until archived (sessions go stale after 90 days) |
+
+`/memory-sync` promotes from tier 1 to tiers 2 and 3; `--ingest` promotes tier 2 to tier 3. The vault is plain files synced between machines, so there is no knowledge-base server to run or secure, and YAML frontmatter keeps every note machine-parseable.
+
 ## Hook Strategy
 
 Six hooks enforce the memory system programmatically:
@@ -17,11 +33,15 @@ Six hooks enforce the memory system programmatically:
 | **SessionEnd** | Flag a real-length session that ended without /memory-sync | command |
 | **UserPromptSubmit** | Surface a logged correction when the prompt touches its topic | command |
 
-Plus one enhanced slash command:
+Plus five slash commands:
 
 | Command | Purpose |
 |---------|---------|
 | **`/memory-init`** | /init on steroids — detects project, creates everything, loads context |
+| **`/memory-sync`** | End-of-session sync: session note, decisions log, learnings, staging clean-up (`--dream`, `--ingest`, `--tidy`, `--status`, `--auto`) |
+| **`/memory-load`** | Restore hook-level context from `.claude/memory-state.json`, then delegate the vault search to memberberry |
+| **`/handoff`** | Capture the current work unit into a handoff scratch file before `/clear` |
+| **`/decision`** | Log one decision to `_decisions.md` without a full sync |
 
 ---
 
@@ -39,7 +59,7 @@ The project slug drives everything — where sessions get written, where context
 6. `package.json` / `pyproject.toml` — project name
 7. The main checkout's directory name in git (so `noted/src` or a linked worktree is `noted`), else the directory basename
 
-One implementation, `hooks/slug-lib.sh`: the hooks source it and call `resolve_slug`; the commands run `bash slug-lib.sh`, which prints the slug. Step 4 is what lets a session in a linked worktree (a Chief lead, say) land in the main checkout's staging folder and vault notes.
+One implementation, `hooks/slug-lib.sh`: the hooks source it and call `resolve_slug`; the commands run `bash slug-lib.sh`, which prints the slug. Step 4 is what lets a session in a linked worktree land in the main checkout's staging folder and vault notes.
 
 ### Where the Slug Lives
 
@@ -64,11 +84,13 @@ Fires every time Claude Code starts. Deterministic context injection.
 ### What It Does
 
 1. **Detect project slug** — reads `.claude/CLAUDE.md` for the `memory:project-slug` comment. If missing, falls back through the detection priority chain. The slug is charset-clamped before it touches any path.
-2. **Validate Obsidian structure** — checks if `5 Agent Memory/sessions/by-project/<slug>/` exists (via file check if vault is locally synced).
+2. **Query vault state via the Obsidian CLI** — project-index row, open tasks, working files and session count: four queries in parallel with a ~3s watchdog, cached 15 minutes per slug+branch. The corrections query always runs live and rebuilds `.corrections-index`. If the CLI is unavailable it says so and falls back to minimal context.
 3. **Inject context pointer** — outputs `hookSpecificOutput.additionalContext` telling Claude where to find memory and what slug to use (or plain stdout when `MEMORY_HOOK_PLAINTEXT=1`).
-4. **Flag pending work** — surfaces a pending handoff (`handoff.md`) and the `.unsynced` marker SessionEnd leaves when a prior session was never synced.
-5. **Flag if uninitialised** — if no slug found, context tells Claude to suggest running `/memory-init`.
-6. **Handle the compaction restart** — when `source=compact`, harvests the compaction summary into a handoff scratch file, preserving the session counter and start time across compaction. (No stub-filling or blackbox direction — the handoff is injected directly.)
+4. **Flag pending work** — on `source=clear`, injects an armed `handoff.md` and renames it `handoff.consumed.md`; on a full start (`startup`/`resume`), surfaces the `.unsynced` marker SessionEnd leaves when a prior session was never synced. A full start does not read `handoff.md`.
+5. **Flag if uninitialised** — if `.claude/CLAUDE.md` has no `memory:project-slug` marker, the context warns, suggests `/memory-init` and names the auto-detected slug it is using.
+6. **Check the dream timer** — on a full start, sets `.dream-pending` when the last `/memory-sync --dream` was more than 24 hours ago, and surfaces the nudge.
+7. **Write session state** — `.claude/memory-state.json`, this session's `.session-meta`, and the slot's `.last-session`; session folders older than 7 days are pruned.
+8. **Handle the compaction restart** — when `source=compact`, harvests the compaction summary into a handoff scratch file, preserving the session counter and start time across compaction. (No stub-filling or blackbox direction — the handoff is injected directly.)
 
 ### SessionStart vs UserPromptSubmit
 
@@ -84,7 +106,7 @@ Fires before context compaction. Checkpoint stubs are retired — the hook now d
 
 ### What It Does
 
-1. **Clear the read-once cache** — removes the per-session dedup index (keyed on `CLAUDE_SESSION_ID`) so the fresh compacted session can re-read files freely
+1. **Clear the read-once cache** — removes this session's dedup index (keyed on the hook input's `session_id`, falling back to `CLAUDE_SESSION_ID`; with neither, nothing is cleared) so the fresh compacted session can re-read files freely
 2. **Inject nothing** — Claude can't act mid-compaction, so the hook emits no output. The continuation path is the handoff workflow: SessionStart with `source=compact` harvests the compaction summary into a handoff scratch file and injects it as `additionalContext` so the next session resumes automatically.
 
 ### Compaction as a Dormant Safety Net
@@ -94,7 +116,8 @@ Compaction is no longer the primary large-session path. The preferred workflow i
 ### The Handoff Scratch Lifecycle
 
 ```
-/handoff writes ~/.claude/memory-staging/<slug>/handoff.md
+/handoff writes <slot>/handoff.md
+    (the slot is ~/.claude/memory-staging/<slug>/)
     (fallback: session-end.sh harvests on a clear with no handoff,
      or session-start.sh harvests the compaction summary on source=compact)
   ↓
@@ -105,15 +128,15 @@ SessionStart renames it handoff.consumed.md
 /memory-sync deletes both handoff.md and handoff.consumed.md
 ```
 
-A single-slot scratch file — only one handoff at a time per project.
+A single-slot scratch file — one handoff at a time per project (the slot, `<slug>/`).
 
 ### hooks/handoff-lib.sh — Shared Library
 
-`hooks/handoff-lib.sh` is a bash library that holds the handoff read/write functions used by multiple hooks. It is **not** registered as a hook event; it is sourced defensively by `session-start.sh` and `session-end.sh`:
+`hooks/handoff-lib.sh` is a bash library that holds the handoff read/write functions used by multiple hooks. It is **not** registered as a hook event; it is sourced by `session-start.sh` (always), `session-end.sh` (clear branch only) and `stop-memory.sh` (lazily, for the token nudge), each behind an existence check:
 
 ```bash
-# Sourced at the top of each hook that needs handoff functions:
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/handoff-lib.sh" 2>/dev/null || true
+LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
+if [[ -f "$LIBDIR/handoff-lib.sh" ]]; then source "$LIBDIR/handoff-lib.sh"; HANDOFF_LIB=1; else HANDOFF_LIB=0; fi
 ```
 
 The CLI dispatcher inside `handoff-lib.sh` is guarded by `[[ "${BASH_SOURCE[0]}" == "${0}" ]]` so sourcing it never runs any code — only function definitions are loaded.
@@ -128,9 +151,10 @@ Fires when Claude finishes responding. Lightweight session tracking.
 
 ### What It Does
 
-1. **Increment message counter** — one awk pass updates the count and last-activity time in `~/.claude/memory-staging/<slug>/.session-meta`, deriving duration from the `session_start_epoch` SessionStart wrote.
-2. **Check thresholds** — fires at 15 and 30 messages (30 checked first, with independent sent-flags so a session that jumps past 15 still nudges), or after 45+ minutes; also checks the 24-hour dream timer.
-3. **Emit nudge** — via `systemMessage` (shown to the user, not Claude): "This session looks substantial. Consider running /memory-sync before ending."
+1. **Increment message counter** — one awk pass updates the count and last-activity time in `~/.claude/memory-staging/<slug>/sessions/<session_id>/.session-meta`, deriving duration from the `session_start_epoch` SessionStart wrote.
+2. **Check thresholds** — fires at 15 and 30 messages (30 checked first, with independent sent-flags so a session that jumps past 15 still nudges), or after 45+ minutes.
+3. **Check the handoff token threshold** — once the session passes 8 exchanges it reads the live token count from the transcript and nudges once at `memory.handoffTokenThreshold` (project then global `settings.json`, default 150000).
+4. **Emit nudge** — via `systemMessage` (shown to the user, not Claude), e.g. "This session has 15 exchanges (~20min). Consider running /memory-sync to checkpoint progress to Obsidian." or "~155k tokens — consider /handoff then /clear to continue in a fresh session." Co-firing nudges are joined with ` | `.
 
 ### Why Not Auto-Write Sessions on Stop
 
@@ -146,7 +170,7 @@ Fires when the session ends (close, `exit`, `logout`, or `/clear`). It catches t
 
 ### What It Does
 
-1. **Read the end reason** from stdin. A `clear` is a deliberate wipe — skip it.
+1. **Read the end reason** from stdin. A `clear` is a deliberate wipe — never flagged unsynced. If no handoff is armed, the hook builds a deterministic clear-fallback `handoff.md` from the transcript so the next SessionStart has something to inject, then exits.
 2. **Detect and clamp the slug**, then read `.session-meta`.
 3. **Flag if unsynced** — if the session ran to real length (≥10 messages) and `.session-meta` has no `synced=true`, write an `.unsynced` marker (end time + message count) to staging.
 
@@ -179,7 +203,7 @@ A correction loaded at SessionStart competes with everything else for attention 
 
 ## /memory-init — The Init on Steroids
 
-This replaces the standard `/init` workflow for memory-enabled projects. It's a slash command (not a hook) because it needs MCP-Obsidian access and interactive confirmation.
+This replaces the standard `/init` workflow for memory-enabled projects. It's a slash command (not a hook) because it needs Obsidian MCP access and interactive confirmation.
 
 ### Detection Phase
 
@@ -214,7 +238,7 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
      <!-- memory:vault-path=1 Projects/Personal/my-project -->
      ```
 
-2. **Create Obsidian structure** via MCP-Obsidian:
+2. **Create Obsidian structure** via the Obsidian MCP server:
    ```
    5 Agent Memory/sessions/by-project/my-project/  (if not exists)
    ```
@@ -223,13 +247,11 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 
 4. **Load existing context** — search for prior sessions on this project
    ```
-   search_notes(query="my-project", searchContent=true)
+   search vault for "my-project"
    ```
    Present summary of what was found.
 
-5. **Check for a pending handoff** — look in `~/.claude/memory-staging/<slug>/` for a `handoff.md` or `handoff.consumed.md` from a prior session that was not yet cleaned up by `/memory-sync`
-
-6. **Ingest auto-memory** — if `~/.claude/projects/<project>/memory/MEMORY.md` exists, offer to pull relevant items into Obsidian
+5. **Ingest auto-memory** — if `~/.claude/projects/<project>/memory/MEMORY.md` exists, offer to pull relevant items into Obsidian
 
 ### What Makes This Different from /init
 
@@ -260,7 +282,7 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 ├── hooks/
 │   ├── handoff-lib.sh                     # Shared handoff library (sourced, not a hook)
 │   ├── slug-lib.sh                        # The slug lookup (sourced by hooks, run by commands)
-│   ├── state-lib.sh                       # Session/lead state paths and command flags
+│   ├── state-lib.sh                       # Session state paths, command flags, auto marker
 │   ├── session-start.sh                   # SessionStart hook
 │   ├── pre-compact.sh                     # PreCompact hook (clears read-once cache)
 │   ├── stop-memory.sh                     # Stop hook
@@ -272,9 +294,7 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 │       ├── sessions/<session_id>/
 │       │   ├── .session-meta              # Turn count, nudges, synced/synced_at, handoff_at
 │       │   └── .transcript-path           # The /handoff breadcrumb for this session
-│       ├── leads/<worktree>/              # A Chief lead's slot: its own handoff.md,
-│       │                                  #   handoff.consumed.md, .unsynced, .last-session
-│       ├── .last-session                  # Sam's slot: newest session id
+│       ├── .last-session                  # Newest session id
 │       ├── .corrections-index             # title|key index for UserPromptSubmit
 │       ├── .unsynced                      # written by SessionEnd, cleared by /memory-sync
 │       ├── handoff.md                     # Current-work-unit scratch (written by /handoff)
@@ -284,29 +304,31 @@ This replaces the standard `/init` workflow for memory-enabled projects. It's a 
 
 Installed as a plugin, the hooks, agents, and commands live at the plugin root instead, registered via `hooks/hooks.json` and `.claude-plugin/plugin.json` with `${CLAUDE_PLUGIN_ROOT}` paths.
 
-### Session state and Chief leads
+### Session state
 
-Two sessions in one project (Sam in the main checkout, a Chief lead in a linked worktree) used to share every staging file: each SessionStart reset the other's `.session-meta`, and a lead's sync or `/clear` could consume Sam's armed `handoff.md`. `hooks/state-lib.sh` (from cc-chief #42 / PR #99) splits it:
+Two sessions in one project used to share every staging file: each SessionStart reset the other's `.session-meta`. `hooks/state-lib.sh` splits per-session state from project state:
 
 | State | Where |
 |---|---|
 | `.session-meta`, `.transcript-path` | `<slug>/sessions/<session_id>/`, keyed by the hook input's `session_id`. Folders untouched for 7 days are pruned at SessionStart |
-| `handoff.md`, `handoff.consumed.md`, `.unsynced`, `.last-session` | the slot: Sam's is `<slug>/`; a lead's (`CHIEF_LEAD=1`) is `<slug>/leads/<worktree>/` |
+| `handoff.md`, `handoff.consumed.md`, `.unsynced`, `.last-session` | the slot, `<slug>/` |
 | `.corrections-index`, `.vault-cache-*`, `.last-dream`, `.dream-pending` | `<slug>/`, shared |
 
 Hook input without a `session_id` (an older Claude Code, a hand run) keeps the old flat layout.
 
 The commands learn their session id from `${CLAUDE_SESSION_ID}`, which Claude Code substitutes in commands and skills. If it is empty, the slot's `.last-session` stands in, and `/handoff` refuses when more than one transcript in the project's transcript folder was written in the last two minutes.
 
-### `--auto`: no questions
+### Auto memory: `--auto` and `memory:auto=true`
 
-`/memory-sync` and `/handoff` take `--auto`, and a lead (`CHIEF_LEAD=1`) is always auto. Flags are parsed by `state-lib.sh args`, which refuses ones it does not know. Each command has an "Auto mode" table naming what replaces every question or stop. Learnings from an auto sync are written to `sessions/by-project/<slug>/proposed-learnings/` with `source: lead` and `auto: true`, never to `learnings/`, so nothing reaches the curated learnings without Sam's approval. Both commands mark the session (`synced_at`, `handoff_at`) in its `.session-meta`.
+`/memory-sync` and `/handoff` take `--auto`. A project opts into auto for every run with `<!-- memory:auto=true -->` in its `.claude/CLAUDE.md` (a linked worktree without its own file reads the main checkout's); `state-lib.sh args` then prints `AUTO=1` with `AUTO_WHY=project`, and SessionStart tells Claude it manages that project's memory. Flags are parsed by `state-lib.sh args`, which refuses ones it does not know. Each command has an "Auto mode" table naming what replaces every question or stop.
+
+An auto sync writes learnings to `learnings/` like an attended one, with `auto: true`, `project:` and `session:` in the frontmatter. Nobody checked them, so every `--dream` reviews the unreviewed ones against the repo and the vault as they are now (Phase 3.5): accurate ones get `reviewed:`, ones with a wrong detail are patched, and wrong ones move to `5 Agent Memory/archive/learnings/`. Learnings without `auto: true` are never touched by that review. Both commands mark the session (`synced_at`, `handoff_at`) in its `.session-meta`.
 
 ---
 
 ## Hook ↔ MCP Bridge
 
-The fundamental challenge: hooks are shell commands that can't call MCP-Obsidian. The solution is a two-stage pattern:
+The fundamental challenge: hooks are shell commands that can't call an MCP server. The solution is a two-stage pattern:
 
 ```
 Hook (shell)                          Claude (MCP)
@@ -318,20 +340,30 @@ Hook (shell)                          Claude (MCP)
     │                                      └── cleans staging files
 ```
 
-### Staging File Format
+### Handoff File Format
 
 ```yaml
 ---
-type: handoff|session-meta|nudge
-project-slug: my-project
-created: 2026-03-17T14:30:00Z
+slug: "my-project"
+branch: "main"
+created: "2026-03-17T14:30:00Z"
+source: "handoff"        # handoff | clear-fallback | compact-fallback
+live_tokens: 152000
+consumed: false
+supersedes: ""
 ---
 
-## Session State
-<content that needs to be written to Obsidian>
+## Current Work — Narrative
+<!-- HANDOFF:NARRATIVE:START --> ... <!-- HANDOFF:NARRATIVE:END -->
+## Do-Not-Redo
+<!-- HANDOFF:DONOTREDO:START --> ... <!-- HANDOFF:DONOTREDO:END -->
+## Git State
+## Files Touched (this work unit)
 ```
 
-The SessionStart hook checks for a pending handoff file and injects its content as `additionalContext`, then renames it `handoff.consumed.md`. This closes the loop without requiring MCP access from shell scripts.
+`.session-meta` is plain `key=value` lines, not YAML.
+
+On `source=clear`, the SessionStart hook checks for an armed handoff file and injects its narrative block as `additionalContext`, then renames it `handoff.consumed.md`. This closes the loop without requiring MCP access from shell scripts.
 
 ---
 
@@ -374,8 +406,8 @@ The hooks are registered in `~/.claude/settings.json` (user-level, applies to al
 1. User opens Claude Code in ~/projects/new-thing/
 2. SessionStart hook fires:
    - No .claude/CLAUDE.md found
-   - No memory:project-slug detected
-   - Injects context: "No memory configuration found. Run /memory-init to set up."
+   - No memory:project-slug marker, so the slug is auto-detected
+   - Injects context: "No memory config. Run /memory-init to set up. Using auto-detected slug ..."
 3. User types: /memory-init
 4. Slash command:
    - Detects: git remote → "new-thing", package.json → "New Thing App"
@@ -391,12 +423,14 @@ The hooks are registered in `~/.claude/settings.json` (user-level, applies to al
 8. User runs /memory-sync at end → structured session note to Obsidian
 ```
 
-### Returning to an Existing Project (after a `/handoff` + `/clear`)
+### Continuing after `/handoff` + `/clear`
+
+If Claude Code is closed and reopened instead, SessionStart is `source=startup` and does not inject the handoff; run `/memory-load`, which reads `handoff.md` (step 0.2).
 
 ```
 1. User ran /handoff at the end of a large session → handoff.md written to staging
 2. User ran /clear → session ended; SessionEnd skips the .unsynced flag (clear is deliberate)
-3. User opens Claude Code in ~/projects/my-project/ (new session)
+3. The same Claude Code window starts the fresh session
 4. SessionStart hook fires (source=clear):
    - Reads .claude/CLAUDE.md → slug=my-project, area=AWS
    - Finds handoff.md in staging
@@ -417,7 +451,7 @@ Per-hook budgets, enforced as WARN (not FAIL) on the Tier 1 harness:
 | Hook | Budget |
 |------|--------|
 | SessionStart | warm ≤300ms / cold ≤3s (cold runs the cacheable vault queries in parallel) |
-| PreCompact | ≤100ms (clears read-once cache only; spawn-dominated) |
+| PreCompact | ≤100ms target (clears read-once cache only; spawn-dominated; recorded by the harness, no WARN check) |
 | Stop | ≤50ms target |
 | SessionEnd | ≤100ms |
 | UserPromptSubmit | ≤100ms (fast-exits before stdin when no corrections exist) |

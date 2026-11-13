@@ -822,7 +822,9 @@ RO_HOOK="$HOOKS_DIR/read-once/hook.sh"
 if [[ ! -f "$RO_HOOK" ]]; then
     fail "read-once/hook.sh not found at $RO_HOOK"
 else
-    RO_CACHE_DIR="$HOME/.claude/read-once/cache"
+    # Only this test's own session cache: the cache root holds live sessions' too.
+    RO_SESSION="hookval-readonce-test"
+    RO_CACHE_DIR="$HOME/.claude/read-once/cache/$RO_SESSION"
     # Clean cache before: the second read must hit a cache seeded by the first.
     rm -rf "$RO_CACHE_DIR" 2>/dev/null || true
 
@@ -832,7 +834,7 @@ else
     RO_TARGET="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
     RO_INPUT="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$RO_TARGET\"}}"
     # Fixed session id so both reads share one cache dir
-    export CLAUDE_SESSION_ID="hookval-readonce-test"
+    export CLAUDE_SESSION_ID="$RO_SESSION"
 
     # warn mode (default): first read primes cache, second read warns with allow
     RO_FIRST=$(echo "$RO_INPUT" | READ_ONCE_MODE=warn bash "$RO_HOOK" 2>/dev/null || true)

@@ -419,6 +419,27 @@ B2_PAYLOAD2="{\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE2\"
 printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" >/dev/null 2>&1 || true
 B2_OUT4="$(printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" CLAUDE_SESSION_ID=b2test bash "$RO" 2>/dev/null)" || true
 assert_contains "B2: accented path second read is deduped" "already" "$B2_OUT4"
+
+# The session comes from the hook input: Claude Code does not export
+# CLAUDE_SESSION_ID to hooks. Keyed on the old `$$` fallback, every call got its
+# own cache folder, so nothing was ever deduped outside these env-seeded tests.
+B2_PAYLOAD3="{\"session_id\":\"b2-stdin\",\"tool_name\":\"Read\",\"tool_input\":{\"file_path\":\"$B2_FILE2\"}}"
+B2_OUT5="$( unset CLAUDE_SESSION_ID
+    printf '%s' "$B2_PAYLOAD3" | HOME="$B2_HOME" bash "$RO" >/dev/null 2>&1 || true
+    printf '%s' "$B2_PAYLOAD3" | HOME="$B2_HOME" bash "$RO" 2>/dev/null || true )"
+assert_contains "B2: payload session_id dedupes without the env var" "already" "$B2_OUT5"
+# No session id anywhere: allow the read, cache nothing (no per-PID folder).
+B2_DIRS_BEFORE="$(ls "$B2_HOME/.claude/read-once/cache" | wc -l | tr -d ' ')"
+B2_RC6=0; B2_OUT6="$( unset CLAUDE_SESSION_ID
+    printf '%s' "$B2_PAYLOAD2" | HOME="$B2_HOME" bash "$RO" 2>/dev/null )" || B2_RC6=$?
+B2_DIRS_AFTER="$(ls "$B2_HOME/.claude/read-once/cache" | wc -l | tr -d ' ')"
+assert_eq "B2: no session id exits 0"            "0"                "$B2_RC6"
+assert_eq "B2: no session id emits nothing"      ""                 "$B2_OUT6"
+assert_eq "B2: no session id leaves no cache dir" "$B2_DIRS_BEFORE" "$B2_DIRS_AFTER"
+# Round trip: PreCompact clears the folder read-once wrote, found by the same session_id.
+printf '%s' '{"session_id":"b2-stdin"}' | HOME="$B2_HOME" bash "$HERE/../hooks/pre-compact.sh" >/dev/null 2>&1 || true
+B2_LEFT="no"; [[ -d "$B2_HOME/.claude/read-once/cache/b2-stdin" ]] && B2_LEFT="yes"
+assert_eq "B2: pre-compact clears the cache read-once keyed on session_id" "no" "$B2_LEFT"
 rm -rf "$B2_HOME"
 
 # --- B3: co-firing count + duration nudges must BOTH be shown ---

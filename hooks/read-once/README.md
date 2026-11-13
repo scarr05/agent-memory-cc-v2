@@ -1,6 +1,6 @@
 # read-once — PreToolUse Hook
 
-Prevents redundant file re-reads within a Claude Code session. Saves ~2,000 tokens per blocked re-read.
+Flags redundant file re-reads within a Claude Code session. The default `warn` mode only advises; `deny` mode blocks them, saving ~2,000 tokens per blocked re-read.
 
 **Vendored from:** [Boucle framework](https://github.com/Bande-a-Bonnot/Boucle-framework/tree/main/tools/read-once)
 
@@ -73,7 +73,7 @@ tokens instead of ~2,000).
 ## Cache Management
 
 ```bash
-# Clear the session cache manually
+# Clear every session's cache manually
 rm -rf ~/.claude/read-once/cache/
 
 # Cache auto-cleans entries older than 24 hours
@@ -86,4 +86,4 @@ to prevent stale state after context compaction.
 
 - **No conflict with memberberry/blackbox subagents** — they use Bash tool (CLI calls), not Read tool
 - **PreCompact cache clear** — handled by `pre-compact.sh`
-- **Session-scoped** — each Claude Code session gets its own cache directory
+- **Session-scoped** — the cache directory is keyed on the hook input's `session_id` (fallback: the `CLAUDE_SESSION_ID` env var). With neither, the read is allowed uncached

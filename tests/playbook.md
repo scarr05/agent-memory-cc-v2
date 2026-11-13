@@ -1,7 +1,7 @@
 # Session Testing Playbook
 
 Manual protocol for Tier 2 (session baseline) and Tier 3 (full lifecycle) testing.
-Run Tier 1 (`bash tests/hook-validation.sh`) first.
+Run Tier 1 (`HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" <slug>`) first.
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ Run Tier 1 (`bash tests/hook-validation.sh`) first.
 
 ## Tier 2 — Session Baseline (~3 min per project)
 
-Run this on each project to measure the context cost of the v3 memory system.
+Run this on each project to measure the context cost of the memory system.
 
 ### Steps
 
@@ -51,7 +51,7 @@ Run after changes to subagents, slash commands, or `pre-compact.sh`. Also before
 ### When to Run
 
 - After modifying `memberberry.md`, `blackbox.md`, or any slash command
-- After changing `pre-compact.sh`, `session-start.sh`, `session-end.sh`, or `prompt-corrections.sh`
+- After changing any hook script
 - Before merging to main
 
 ### Steps (after completing Tier 2)
@@ -60,7 +60,7 @@ Run after changes to subagents, slash commands, or `pre-compact.sh`. Also before
 2. Trigger **real context compaction** (let it auto-compact, or run `/compact`). Note: `/clear` is **not** a substitute — it starts SessionStart with `source=clear`, not `source=compact`, so it won't exercise the compaction handoff.
 3. Check the PreCompact → SessionStart handoff:
    - PreCompact wrote **no** stub — confirm the staging dir has no `checkpoint-*.md` (`ls ~/.claude/memory-staging/<slug>/checkpoint-*.md` → "No such file"). It only cleared the read-once cache.
-   - After compaction, `SessionStart` (`source=compact`) harvested Claude Code's own compaction summary into a handoff scratch and injected it as `additionalContext` — confirm the fresh context contains a `RESUMING FROM HANDOFF` block (no blackbox involvement)
+   - After compaction, `SessionStart` (`source=compact`) harvested Claude Code's own compaction summary into a handoff scratch and injected it as `additionalContext` — confirm the fresh context contains a `Memory System (post-compact)` block with `Recovered context from the compaction summary` (no blackbox involvement; `RESUMING FROM HANDOFF` appears only after `/clear`)
    - The handoff scratch is present: `ls ~/.claude/memory-staging/<slug>/handoff*.md`
 4. Note context % after compaction → `Post-Compact %`
 5. Send exactly: **"What were we just working on?"**
@@ -70,9 +70,9 @@ Run after changes to subagents, slash commands, or `pre-compact.sh`. Also before
    - **partial** — got some context but missed key details
    - **no** — lost or confused
 7. Run `/memory-sync` and verify:
-   - Session note written to vault? (`obsidian search query="type: session" path="5 Agent Memory/sessions/by-project/<slug>"`)
-   - Staging files cleaned up? (`ls ~/.claude/memory-staging/<slug>/`)
-   - `.session-meta` now contains `synced=true`
+   - Session note written to vault? (`"${OBSIDIAN_CLI_PATH:-obsidian}" search query='"type: session"' path="5 Agent Memory/sessions/by-project/<slug>"`; the phrase must be quoted inside the query, bare it fails with `Operator "type" not recognized`)
+   - Handoff scratch gone? (`ls ~/.claude/memory-staging/<slug>/handoff*.md` → none)
+   - `~/.claude/memory-staging/<slug>/sessions/<session_id>/.session-meta` now contains `synced=true` and `synced_at=`
 8. **Unsynced-flag check:** in a fresh session, do 10+ exchanges, then end it (close or `exit`) **without** `/memory-sync`. Reopen the project and confirm SessionStart warns that the previous session was never synced. Run `/memory-sync` to clear it.
 9. Record results
 
@@ -92,7 +92,7 @@ Append to your baseline results file:
 
 | Trigger                        | Tier 1 | Tier 2 | Tier 3 |
 |--------------------------------|--------|--------|--------|
-| Any hook script change         | Yes    | No     | No     |
+| Any hook script change         | Yes    | No     | Yes    |
 | Subagent definition change     | Yes    | Yes    | Yes    |
 | Slash command change           | Yes    | No     | Yes    |
 | Before merge to main           | Yes    | Yes    | Yes    |
@@ -100,7 +100,7 @@ Append to your baseline results file:
 
 ## Handoff Workflow Verification Gates
 
-Run before merging the handoff workflow. Gates 1–2 are scripted; 3–4 are live-session manual.
+Run before merging a change to the handoff workflow. Gates 1–2 are scripted; 3–4 are live-session manual. Also run the pytest harness, which drives the hooks and the commands' bash blocks in a temp `HOME`: `uv run --no-project --with pytest pytest tests/test_memory_hooks.py -q`.
 
 > **First, run the Tier-1 regression suite against the _repo_ hooks, not the deployed copies.** `hook-validation.sh` defaults `HOOKS_DIR` to `~/.claude/hooks` (what is installed), which can lag the branch under review. Validate the code on the branch with:
 >
@@ -108,7 +108,7 @@ Run before merging the handoff workflow. Gates 1–2 are scripted; 3–4 are liv
 > HOOKS_DIR=./hooks bash tests/hook-validation.sh "$PWD" "$(sed -n 's/.*memory:project-slug=\([a-z0-9-]*\).*/\1/p' .claude/CLAUDE.md | head -1)"
 > ```
 >
-> Expect a `PASS` summary with `FAIL=0` (`39/39` with the Obsidian CLI present, per the Prerequisites above; one fewer when the optional cold-timing check is skipped because the CLI is unavailable). Omitting `HOOKS_DIR=./hooks` runs the installed hooks instead and reports false failures until you redeploy them.
+> Expect a `PASS` summary with `FAIL=0` (the total is 44 when every timing check passes; each timing WARN, usual on Git Bash, drops it by one, and the cold-timing check is skipped without the Obsidian CLI). Omitting `HOOKS_DIR=./hooks` runs the installed hooks instead and reports false failures until you redeploy them.
 
 ### Gate 1 — Transcript windowing (scripted)
 ```bash
@@ -132,4 +132,4 @@ Expect the printed value `160000` (back-scan finds the usage entry past the trai
 In a real Claude Code session: run `/handoff`, fill the narrative, `/clear`. In the fresh session, confirm Claude actually receives the `RESUMING FROM HANDOFF` context (ask it "what are you resuming?"). If it does not, set `MEMORY_HOOK_PLAINTEXT=1` and retry — confirm the plaintext fallback injects.
 
 ### Gate 4 — Transcript resolution for /handoff (LIVE)
-In a real session, run `/handoff` and inspect its Step 1 output: confirm `TRANSCRIPT` resolved to a real `.jsonl` (not `<none>`) and `AMBIGUOUS=0`. `CLAUDE_SESSION_ID` is expected to be unset, so the resolver should hit the `.transcript-path` breadcrumb persisted by the Stop/SessionStart hooks. Separately, open two sessions in the same repo, let both write a turn, then run `/handoff` in one and confirm the recency guard reports `AMBIGUOUS=1` rather than guessing.
+In a real session, run `/handoff` and inspect its Step 1 output: confirm `SESSION_SOURCE=given` (Claude Code substituted the session id), `TRANSCRIPT` resolved to a real `.jsonl` (not `<none>`) and `AMBIGUOUS=0`. Separately, open two sessions in the same repo, let both write a turn, then run `/handoff` in one and confirm it resolves its own transcript. `AMBIGUOUS=1` is expected only when the id is not substituted (`SESSION_SOURCE=pointer`) and a second transcript moved in the last two minutes.

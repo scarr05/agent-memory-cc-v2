@@ -1,6 +1,6 @@
 # Setup Guide — Agent Memory v4
 
-Two ways to install: as a Claude Code **plugin** (one command registers all six hooks, both subagents, and the slash commands together) or by **manual copy** into `~/.claude/` (the v2 method).
+Two ways to install: as a Claude Code **plugin** (one command registers all six hooks, both subagents, and the slash commands together) or by **manual copy** into `~/.claude/`.
 
 > **Pick one. They are alternatives, not layers.** Both paths register the same six hook events — the plugin
 > through `hooks/hooks.json`, the manual path through the `hooks` block in `~/.claude/settings.json`. With both
@@ -17,10 +17,10 @@ Two ways to install: as a Claude Code **plugin** (one command registers all six 
 
 | Hook | Event | Does |
 |------|-------|------|
-| `session-start.sh` | SessionStart | Detect slug, inject the prior-context pointer, flag a pending handoff and unsynced sessions, run the post-compaction handoff |
+| `session-start.sh` | SessionStart | Detect slug, inject the prior-context pointer, inject an armed handoff after `/clear`, flag unsynced sessions, check the 24-hour dream timer, run the post-compaction handoff |
 | `read-once/hook.sh` | PreToolUse (Read) | Deduplicate source-code re-reads |
 | `pre-compact.sh` | PreCompact | Clear the read-once cache before compaction (checkpoint stubs retired — injects nothing) |
-| `stop-memory.sh` | Stop | Track message count, nudge for `/memory-sync`, check the 24-hour dream timer |
+| `stop-memory.sh` | Stop | Track message count, nudge for `/memory-sync`, nudge for `/handoff` at the token threshold |
 | `session-end.sh` | SessionEnd | Flag a real-length session that ended without `/memory-sync` |
 | `prompt-corrections.sh` | UserPromptSubmit | Surface a logged correction when the prompt touches its topic |
 
@@ -90,7 +90,7 @@ cp hooks/*.sh ~/.claude/hooks/ && cp hooks/read-once/hook.sh ~/.claude/hooks/rea
 grep -n NODE_EXTRA_CA_CERTS ~/.claude/settings.json
 ```
 
-If either test suite fails on the 3.2 branch, the fault is in the `else` arm of the `BASH_VERSINFO` gate in `prompt-corrections.sh` or `session-end.sh`.
+If either test suite fails on the 3.2 branch, the fault is in the `else` arm of the `BASH_VERSINFO` gate in `prompt-corrections.sh` or `slug-lib.sh` (`_slugify`).
 
 ### 4. Verify
 
@@ -154,6 +154,10 @@ cp agents/memberberry.md agents/blackbox.md ~/.claude/agents/
 mkdir -p ~/.claude/commands
 cp commands/memory-init.md commands/memory-sync.md \
    commands/memory-load.md commands/handoff.md commands/decision.md ~/.claude/commands/
+
+# The two skills (the plugin path loads them itself)
+mkdir -p ~/.claude/skills
+cp -r skills/agent-memory skills/obsidian-cli ~/.claude/skills/
 ```
 
 ### 5. Global CLAUDE.md
@@ -168,7 +172,7 @@ cp config/global-claude-md-v2.md ~/.claude/CLAUDE.md   # merge if one exists
 mkdir -p ~/.claude/memory-staging
 ```
 
-Hooks write here; `/memory-sync` cleans it.
+Hooks keep their state here (handoff scratch, per-session counters, flags); `/memory-sync` clears the handoff scratch.
 
 ---
 
@@ -297,7 +301,40 @@ On Windows Git Bash the empty-bash spawn floor alone can exceed 100ms, so these 
 
 ## Troubleshooting
 
-Slug detection, MCP availability, Stop-hook latency, and auto-memory vs vault memory are unchanged from v2 — the [setup-guide-v2.md](setup-guide-v2.md) troubleshooting section still applies. Two v4-specific notes:
+### Hooks not firing
+
+```bash
+claude --debug   # verbose mode shows hook execution
+# or press Ctrl+O in a session to see hook stdout/stderr
+```
+
+Check that `~/.claude/settings.json` has the hook paths (manual install) or that `/hooks` lists them (plugin).
+
+### Slug detection wrong
+
+The order is in [hooks-architecture.md](hooks-architecture.md) § Detection Priority. Run `bash ~/.claude/hooks/slug-lib.sh` in the project to see what resolves, and `/memory-init` to pin it: the marker it writes to `.claude/CLAUDE.md` wins on every later session.
+
+### MCP server not available
+
+The hooks don't need MCP; they only touch local staging and the Obsidian CLI. The slash commands (`/memory-sync`, `/memory-load`, `/memory-init`, `/decision`) do. Without it the hooks still track and inject context, and the commands tell you to check the MCP config.
+
+### Stop hook slowing things down
+
+```bash
+time echo '{}' | bash ~/.claude/hooks/stop-memory.sh
+```
+
+Compare it with `time bash -c 'exit 0'`: on Git Bash the spawn floor alone can exceed 100ms, and the hook cannot go below it.
+
+### Auto-memory vs vault memory
+
+They're complementary. Auto-memory (`~/.claude/projects/*/memory/`) is fast, automatic and machine-local; vault memory (`5 Agent Memory/`) is structured, cross-project and shared between agents. `/memory-sync --ingest` is the bridge. Don't disable auto-memory; run `--ingest` now and then to promote useful items to the vault.
+
+### Existing session notes in a flat folder
+
+Notes in `5 Agent Memory/sessions/` from before the by-project layout still work, since search finds them wherever they sit. Move them into `by-project/<slug>/` if you want; new sessions always go there.
+
+### Other notes
 
 - **`.sh` must stay LF.** The repo pins `eol=lf` via `.gitattributes`; if you copy hooks through a tool that rewrites line endings, CRLF will break bash. Re-check with `file ~/.claude/hooks/*.sh`.
 - **Timing budgets are advisory.** See the table above — judge against the recorded baseline, not the absolute target.

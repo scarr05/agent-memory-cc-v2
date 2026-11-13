@@ -1,11 +1,11 @@
 # Obsidian CLI Setup
 
-The agent memory v3 system uses the Obsidian CLI (1.12+) for token-efficient vault reads. This guide covers per-platform setup.
+The agent memory system (v3 onwards) uses the Obsidian CLI (1.12+) for token-efficient vault reads. This guide covers per-platform setup.
 
 ## Prerequisites
 
 - Obsidian 1.12.4+ **installer** (not just an app update — the installer adds the CLI binary)
-- Catalyst licence (early access, as of March 2026)
+- A Catalyst licence was required while the CLI was in early access (early 2026). Check <https://help.obsidian.md/cli> for the current requirement
 
 ## Enable CLI
 
@@ -64,7 +64,7 @@ Add to `~/.claude/settings.json` under `"env"`, using the path from `$OBS_BIN` a
 }
 ```
 
-All hooks use `OBS="${OBSIDIAN_CLI_PATH:-obsidian}"` and will pick this up regardless of PATH state.
+`session-start.sh` (the only hook that calls the CLI) uses `OBS="${OBSIDIAN_CLI_PATH:-obsidian}"`, and the commands and subagents invoke it the same way, so all pick this up regardless of PATH state.
 
 **Verify:**
 
@@ -120,7 +120,7 @@ If the bare `obsidian` command does not work in your shell, set the full path (W
 export OBSIDIAN_CLI_PATH="/mnt/c/Users/<you>/AppData/Local/Programs/Obsidian/Obsidian.com"
 ```
 
-All hooks, commands and subagents invoke it as `"${OBSIDIAN_CLI_PATH:-obsidian}"` and will pick this up. Keep the quotes: the path can contain spaces.
+`session-start.sh`, the commands and the subagents invoke it as `"${OBSIDIAN_CLI_PATH:-obsidian}"` and will pick this up. Keep the quotes: the path can contain spaces.
 
 ## Verify
 

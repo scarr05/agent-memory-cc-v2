@@ -1,2 +1,6 @@
 .claude/
 __pycache__/
+
+# Local tool output: graphify graphs, superpowers scratch
+graphify-out/
+.superpowers/

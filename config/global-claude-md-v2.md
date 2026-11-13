@@ -42,7 +42,7 @@ Log sessions where: key decisions were made, meaningful progress occurred, a dir
 
 ### Dream Consolidation
 
-Roughly every 24 hours the Stop hook surfaces a 💤 dream-pending nudge. When you see it (or when I ask), run `/memory-sync --dream` — it mines recent transcripts for un-logged decisions, corrections, and preferences, cross-references the vault, flags contradictions, and prunes stale sessions. It never writes without my approval — present the dream report first.
+Roughly every 24 hours the SessionStart hook surfaces a 💤 dream-pending nudge. When you see it (or when I ask), run `/memory-sync --dream` — it mines recent transcripts for un-logged decisions, corrections, and preferences, cross-references the vault, flags contradictions, and prunes stale sessions. It saves the learnings it judges worth keeping itself and reports them; decisions, contradictions and stale-session pruning wait for my approval — present the dream report first.
 
 ## Writing & Voice
 
@@ -97,15 +97,17 @@ Commands describe vault operations as verbs; map them to whichever server is reg
 
 ### Context7
 
-- **Context7**: resolve-library-id, get-library-docs (USE THIS for any library/framework docs — don't rely on training data)
+- **Context7**: resolve-library-id, query-docs (USE THIS for any library/framework docs — don't rely on training data)
 
 ## Memory File Paths
 
 ```
 ~/.claude/memory-staging/<slug>/       # Hook staging (local, ephemeral)
-    .session-meta                      # Message count, timestamps
     handoff.md                         # Current-work-unit scratch (written by /handoff)
     handoff.consumed.md                # Renamed by SessionStart after injection
+    .unsynced                          # Written by SessionEnd, removed by /memory-sync
+    .last-session                      # Newest session id
+    sessions/<session_id>/.session-meta  # Message count, timestamps (one folder per session)
 
 5 Agent Memory/sessions/by-project/<slug>/  # Obsidian (permanent)
 5 Agent Memory/learnings/                   # Cross-project knowledge
@@ -135,7 +137,6 @@ Commands describe vault operations as verbs; map them to whichever server is reg
 
 1. When writing to Obsidian, ALWAYS include proper YAML frontmatter
 2. When writing code that uses libraries, ALWAYS use Context7 first
-3. Never write to `learnings/` without my approval — propose first
+3. Which learnings go into `learnings/` is your call: save only what is durable, would change a future session's behaviour and is evidenced in the session (`/memory-sync` Step 4 has the tests), then tell me what you saved. A project with `<!-- memory:auto=true -->` in its `.claude/CLAUDE.md` is yours to manage: run `/memory-sync` yourself when a unit of work is done; it asks nothing and marks its learnings `auto: true` for `--dream` to review
 4. Use `working/` freely, but clean up when done
-5. If the Obsidian MCP server isn't responding, tell me — don't silently skip memory operations. It runs inside Obsidian, so it needs the app open.
-6. Process staging files before they pile up — the hooks create them, you clean them up
+5. If the Obsidian MCP server isn't responding, tell me — don't silently skip memory operations. MCPVault works with Obsidian closed; the Obsidian CLI and the Local REST API plugin both need the app open.

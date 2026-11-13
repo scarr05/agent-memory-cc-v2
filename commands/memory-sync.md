@@ -1,5 +1,5 @@
 ---
-description: "Consolidate session memory into Obsidian vault. Writes a structured session note, proposes learnings, optionally ingests auto-memory. Use at end of significant sessions or when switching context."
+description: "Consolidate session memory into Obsidian vault. Writes a structured session note, chooses and saves the learnings worth keeping, optionally ingests auto-memory. Use at end of significant sessions or when switching context."
 allowed-tools:
   - "mcp__obsidian__read_note"
   - "mcp__obsidian__write_note"
@@ -10,11 +10,13 @@ allowed-tools:
   - "mcp__obsidian__list_directory"
   - "mcp__obsidian__read_multiple_notes"
   - "mcp__obsidian__get_notes_info"
+  - "mcp__obsidian__vault_read"
   - "mcp__obsidian__vault_write"
   - "mcp__obsidian__vault_append"
   - "mcp__obsidian__vault_patch"
+  - "mcp__obsidian__vault_list"
+  - "mcp__obsidian__search_simple"
   - "mcp__obsidian__search_query"
-  - "AskUserQuestion"
   - "Agent"
   - "Bash"
   - "Read"
@@ -34,7 +36,7 @@ Mode flags, parsed by Step 0 (an unknown flag, or two modes at once, stops there
 - **--ingest** — Pull auto-memory from this project into vault (alias for dream Phase 3)
 - **--tidy** — Review old sessions for staleness and archive candidates (alias for dream Phase 4)
 - **--status** — Show current memory state without writing anything
-- **--auto**: combines with any of the above: ask nothing, wait for nothing (see Auto mode). Always on in a Chief lead (`CHIEF_LEAD=1`).
+- **--auto**: combines with any of the above: ask nothing, wait for nothing (see Auto mode). Always on in a project whose `.claude/CLAUDE.md` carries `<!-- memory:auto=true -->`.
 
 ### Step 0: Mode and paths
 
@@ -45,7 +47,7 @@ bash "$HOOKS/state-lib.sh" args memory-sync <<'SYNC_ARGS' || exit 2
 $ARGUMENTS
 SYNC_ARGS
 # This session's own staging: Claude Code substitutes the session id below. SLOT_DIR
-# holds the handoff pair (Sam: the project folder; a lead: leads/<worktree>/).
+# (the project folder) holds the handoff pair.
 bash "$HOOKS/state-lib.sh" paths --session "${CLAUDE_SESSION_ID}"
 ```
 
@@ -53,34 +55,16 @@ Use the printed `MODE`, `AUTO`, `SLUG`, `SLOT_DIR` and `TRANSCRIPT` below. `AUTO
 
 ## Auto mode
 
-`AUTO=1` (from `--auto`, or a Chief lead) is for a session nobody is watching: Chief sends `/memory-sync` and waits for the turn to end, so a question would leave the lead waiting for good (a question in prose still ends the turn as `done`, spike H). Never call `AskUserQuestion` and never end on a question or an offer. Each place the interactive sync asks does this instead:
+`AUTO=1` comes from `--auto` (`AUTO_WHY=flag`) or from a project that opts in with `<!-- memory:auto=true -->` in its `.claude/CLAUDE.md` (`AUTO_WHY=project`). In such a project the agent manages its own memory: it runs `/memory-sync` itself when a unit of work is done, so nobody may be there to answer. Never call `AskUserQuestion` and never end on a question or an offer. Each place the interactive sync asks does this instead:
 
 | Where it asks | What auto does instead |
 |---|---|
 | Step 1: a trivial session ("ask if the user still wants to log it") | Log it anyway: a short session note (Context and Progress, a line each), then on to Step 6, so the sync marker is written |
-| Step 4: the `AskUserQuestion` multi-select for learnings | Approve nothing. Write each candidate to the project's own memory as a proposal (below); never to `5 Agent Memory/learnings/`, so a lead's output never reaches `learnings/corrections/` or global preferences, which Sam's own sessions load (SPEC section 8) |
-| `--ingest`: items that would go through Step 4 | Proposals, as above; the rest go where Ingest Step 3 says |
-| `--dream` and `--tidy`: the report Sam ticks | Write the Dream Report (or the tidy proposal) to `5 Agent Memory/working/<YYYY-MM-DD>-dream-<slug>.md` with frontmatter, and write nothing else: no `_decisions.md` entries from transcripts, no index or date patches, no archive, no Phase 4.4 timestamp, so `.dream-pending` still nudges Sam |
-| Contradictions | Listed in the proposal or report, never resolved |
+| Step 4: saving the learnings you chose | The same as an attended sync: choose by the Step 4 tests and write to `learnings/`, but add `auto: true`, `project: "<slug>"` and `session: "<session note filename>"` to each new or patched learning's frontmatter, so `--dream` reviews it (Dream Phase 3.5) |
+| `--ingest`: items that would go through Step 4 | Learnings as above; the rest go where Ingest Step 3 says |
+| `--dream` and `--tidy`: the report the user ticks | Learnings (Phase 3.3) and the auto-learning review (Phase 3.5) are applied as in an attended dream. Everything else goes in the Dream Report (or the tidy proposal) at `5 Agent Memory/working/<YYYY-MM-DD>-dream-<slug>.md` with frontmatter, unapplied: no `_decisions.md` entries from transcripts, no index or date patches, no archive, no Phase 4.4 timestamp, so `.dream-pending` still nudges |
+| Contradictions | Listed in the session note or report, never resolved |
 | Step 7 and `--status`: the closing summary | Plain lines of what was written; no offer, no "tell me if" |
-
-A learning proposal is one note per learning at `5 Agent Memory/sessions/by-project/<slug>/proposed-learnings/<YYYY-MM-DD>-<kebab-title>.md`:
-
-```yaml
----
-title: "<title>"
-created: <ISO datetime>
-type: learning-proposal
-status: proposed
-category: <preferences|technical|workflow|corrections>
-project: "<slug>"
-source: <lead if CHIEF_LEAD=1, else auto>
-auto: true
-session: "<session note filename>"
----
-```
-
-Then the learning in a sentence or two, and why this session showed it. No `- [ ]` lines: SessionStart lists those as open items. Chief's weekly review puts proposals in front of Sam; only his approval moves one into `learnings/`.
 
 ## Standard Sync (default)
 
@@ -196,13 +180,29 @@ If any decisions were made this session (from the `decisions:` frontmatter array
 list folder "5 Agent Memory/sessions/by-project/<project-slug>/"
 ```
 
-2. If `_decisions.md` doesn't exist, create it using the template from `config/decisions-template.md`, replacing `<Display Name>`, `<slug>`, and `<date>` placeholders:
+2. If `_decisions.md` doesn't exist, create it with this content (the repo's `config/decisions-template.md`), replacing `<Display Name>`, `<slug>`, and `<date>`:
+
+```markdown
+---
+title: "Decisions — <Display Name>"
+type: decisions
+project: "<slug>"
+created: <date>
+modified: <date>
+---
+
+# Decisions — <Display Name>
+
+Append-only log of significant decisions for this project. Each entry includes context, rationale, and a source link back to the session or conversation where the decision was made.
+
+<!-- Entries are appended below this line. Do not reorder or rewrite existing entries. -->
+```
 
 ```
-write note "5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md" with <content from template>
+write note "5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md" with <the content above>
 ```
 
-3. For each decision in the session's `decisions:` array, append an entry (patch under the `## Decisions` heading if the server supports structural patch, else plain append):
+3. For each decision in the session's `decisions:` array, append an entry at the end of the note (plain append: the template has no section headings to patch under):
 
 ```markdown
 
@@ -215,9 +215,9 @@ write note "5 Agent Memory/sessions/by-project/<project-slug>/_decisions.md" wit
 
 4. Update the `modified` date in `_decisions.md` frontmatter by updating the note frontmatter.
 
-### Step 4: Pattern Detection
+### Step 4: Choose and Save Learnings
 
-Review the session for recurring patterns. Check against existing learnings:
+Which learnings get saved is your call, not the user's: never ask them to pick, and never stop to wait for approval. Review the session for recurring patterns and check them against what is already recorded:
 
 ```
 search vault for "<pattern keywords>"
@@ -237,28 +237,25 @@ search vault for "<key phrase from the correction>"
 
 If none survive deduplication, skip to Step 5.
 
-**Approve with one multi-select.** Under `AUTO=1`, skip this: write each candidate as a proposal (Auto mode) and go to Step 5. Otherwise call `AskUserQuestion` once for the whole list, every question `multiSelect: true`:
+**Then choose.** A learning is loaded into future sessions and steers them, so the bar is whether a later session would act differently, and better, for having read it. Each candidate has already survived deduplication; save it only when all three of these hold:
 
-| Field | Value |
-|---|---|
-| question | "Which learnings should I save?" (add "(n of m)" when batched) |
-| header | `Learnings` |
-| option label | the learning's title, 5 words max |
-| option description | new: `<category>: <one-line gist>`; update: `update: <what changes>` |
+| Test | Save | Drop |
+|---|---|---|
+| Durable | Holds beyond this task: a preference, a rule of the stack, a way of working | Task state, a one-off fact, anything the session note or the repo already records |
+| Changes behaviour | A future session would do something differently because of it | True but inert; generic good practice any agent already follows |
+| Evidenced here | The user said it, corrected you, or the approach was tried and the result seen | A guess, or a reading of one ambiguous remark |
 
-Each question takes 2–4 options and one call takes up to 4 questions, so:
+A `corrections/` learning needs the strongest evidence, because `prompt-corrections.sh` puts it in front of every later prompt on that topic: save one only from an explicit correction by the user or a `## Do-Not-Redo` line. When in doubt about any candidate, drop it; a missed learning can be caught by a later sync or `--dream`, a wrong one misleads every session that loads it.
 
-- **1 learning:** the API rejects a one-option question. Ask single-select instead, options `Save` (description as above) and `Drop`.
-- **2–16:** as few questions as needed, 2–4 options each (5 → 3 + 2, never 4 + 1).
-- **More than 16:** ask about the first 16 and write the rest, unapproved, to `working/` (agent-memory skill §5 naming, with frontmatter). Tell the user they're there.
+Then act, with no prompt:
 
-Then act on the answer:
+- **Chosen, new:** write it to `learnings/<category>/` (agent-memory skill §4 frontmatter). `confidence: high` when the user stated it or corrected you; `confidence: medium` when you inferred it from what worked.
+- **Chosen, update:** patch the existing note, and keep what it said before in a dated line so the change can be undone.
+- **Dropped:** write nothing, and keep the title and a one-line reason for Step 7.
 
-- **Selected:** write it to `learnings/<category>/` with `confidence: high` (agent-memory skill §4 frontmatter), or patch the existing note for an update.
-- **Not selected:** drop it, and don't propose it again this sync.
-- **"Other" text:** an edit to the learning it names; apply it if that learning was selected. If it names an unselected learning or none, ask one plain follow-up rather than guess.
+Under `AUTO=1`, the same, with the frontmatter the Auto mode table adds.
 
-A standard sync and `--ingest` write learnings only through this prompt (`--dream` approves through its report). Once written, a correction is surfaced by `prompt-corrections.sh` whenever a later prompt touches that topic (its index is rebuilt at SessionStart).
+A standard sync and `--ingest` write learnings only through this step (`--dream` through its Phase 3.3). Once written, a correction is surfaced by `prompt-corrections.sh` whenever a later prompt touches that topic (its index is rebuilt at SessionStart).
 
 ### Step 5: Update Project Index
 
@@ -283,9 +280,9 @@ After the session note is written:
 
 1. **Handoff scratch**: this slot's `handoff.md` and `handoff.consumed.md` are superseded by the vault note. Delete them.
 2. **Session meta**: this session's `message_count` goes back to 0.
-3. **Synced flag**: this session's meta gets `synced=true` and `synced_at=<epoch>` (SessionEnd reads the flag; Chief compares the time with a ticket's start), and the slot's stale `.unsynced` marker goes.
+3. **Synced flag**: this session's meta gets `synced=true` and `synced_at=<epoch>` (SessionEnd reads the flag), and the slot's stale `.unsynced` marker goes.
 
-Only this session's meta changes, so a sync in a lead never marks Sam's session synced, or the other way round.
+Only this session's meta changes, so a sync never marks another live session in the same project synced.
 
 ```bash
 HOOKS="$HOME/.claude/hooks"
@@ -301,7 +298,8 @@ bash "$HOOKS/state-lib.sh" mark synced --session "${CLAUDE_SESSION_ID}"
 
 Tell the user (under `AUTO=1`, as plain lines with no offer or question):
 - What was written and where
-- Learnings written, and how many were dropped or left in `working/`
+- Each learning saved or updated: title, category and path, so the user can delete or edit any they disagree with
+- Each candidate dropped, with its one-line reason
 - Any open items carried forward
 - Staging files cleaned up
 - Reminder of resumption state if applicable
@@ -330,13 +328,13 @@ Skip anything already captured in vault learnings or sessions.
 ### Step 3: Write New Items
 
 For each genuinely new item from auto-memory:
-- If it's a preference/pattern → propose as learning through the Standard Sync Step 4 multi-select
+- If it's a preference/pattern → a learning candidate: choose and save it as in Standard Sync Step 4
 - If it's a build command/debug insight → write to project session note
 - If it's architecture context → write to relevant project area
 
 ### Step 4: Report
 
-Show the user what was ingested, what was deduplicated, and what needs approval.
+Show the user what was ingested, what was deduplicated, and which learnings you saved or dropped (as in Step 7).
 
 ---
 
@@ -494,11 +492,13 @@ Route each non-duplicate, non-contradicting finding to its destination:
 | Finding type | Destination | Action |
 |-------------|-------------|--------|
 | Decision | `_decisions.md` | Append entry with `source: dream (transcript: <date>)` |
-| Correction | `learnings/corrections/` | Propose as new learning |
-| Preference | `learnings/preferences/` | Propose as new learning |
-| Workflow pattern | `learnings/workflow/` | Propose as new learning |
+| Correction | `learnings/corrections/` | Learning candidate |
+| Preference | `learnings/preferences/` | Learning candidate |
+| Workflow pattern | `learnings/workflow/` | Learning candidate |
 
-**All findings go into the approval report first.** Nothing is written until the user approves.
+**Learnings are yours to choose**, by the Standard Sync Step 4 tests, with one tighter rule: a transcript grep hit is weaker evidence than a session you were in, so save only high-confidence hits and drop the medium ones. Write the chosen ones now and list them in the report as saved; list the dropped ones with a reason. Under `AUTO=1` the same, with the Auto mode frontmatter.
+
+**Everything else goes into the approval report first** (decisions, contradictions, non-learning auto-memory items, stale sessions). None of it is written until the user approves.
 
 #### 3.4 Auto-Memory Ingest
 
@@ -507,11 +507,31 @@ If auto-memory exists at `~/.claude/projects/<project>/memory/`:
 1. Read `MEMORY.md` and any topic files
 2. For each item, search Obsidian for existing coverage (same deduplication as above)
 3. Route genuinely new items:
-   - Preferences/patterns → propose as learnings
+   - Preferences/patterns → learning candidates (3.3)
    - Build commands/debug insights → propose for project session notes
    - Architecture context → propose for project CLAUDE.md
 
 This absorbs the existing `--ingest` behaviour. Running `/memory-sync --ingest` now routes to this phase.
+
+#### 3.5 Review Auto-Written Learnings
+
+An auto sync writes learnings with nobody checking them, so every dream checks them. Find this project's unreviewed ones:
+
+```
+search vault frontmatter under "5 Agent Memory/learnings/" for auto == true, project == "<slug>", and no reviewed field
+# REST server: search_query with JsonLogic; MCPVault: search_notes(searchFrontmatter=true)
+```
+
+Check each against what is true now, not against the session that wrote it: the repo (does the file, flag, command or path it names still exist and behave as it says?), later `_decisions.md` entries and session notes, the transcripts from Phase 2, and the user-written learnings and corrections. Then act, with no prompt (under `AUTO=1` too):
+
+| Verdict | Action |
+|---|---|
+| Accurate | Set `reviewed: <YYYY-MM-DD>` |
+| Right idea, wrong detail (a renamed flag, a moved file, too broad) | Patch it, keep the old text in a dated line, set `reviewed:` |
+| Wrong, superseded, or contradicted by a user-written learning or a later decision | Move it to `5 Agent Memory/archive/learnings/<category>/` with `retired: <YYYY-MM-DD>` and `retired_reason:` in its frontmatter. A moved note is easy to restore; a deleted one isn't |
+| Cannot tell (the evidence is gone either way) | Leave it unreviewed, so the next dream looks again, and list it |
+
+Never touch a learning without `auto: true`: those came from an attended sync or the user. A disagreement between an auto learning and a user-written one is settled for the user-written one; list it in the report as a retirement, not as a contradiction.
 
 ### Dream Phase 4: Prune & Index
 
@@ -521,7 +541,7 @@ Search for sessions older than 90 days:
 
 ```
 search vault frontmatter for status == "complete" under "5 Agent Memory/sessions/"
-# REST server: search_query with JsonLogic; mcp-obsidian: search_notes(searchFrontmatter=true)
+# REST server: search_query with JsonLogic; MCPVault: search_notes(searchFrontmatter=true)
 ```
 
 For each session older than 90 days with `status: complete` and no `promoted_to` field, add to the prune list in the dream report.
@@ -553,11 +573,11 @@ date +%s > ~/.claude/memory-staging/<slug>/.last-dream
 rm -f ~/.claude/memory-staging/<slug>/.dream-pending
 ```
 
-This resets the 24-hour timer checked by the Stop hook and clears the per-project pending nudge.
+This resets the 24-hour timer the SessionStart hook checks and clears the per-project pending nudge.
 
 ### Dream Report
 
-After all four phases, present the full report for approval:
+After all four phases, present the full report:
 
 ```markdown
 ## Dream Report — <date>
@@ -566,10 +586,18 @@ After all four phases, present the full report for approval:
 - [ ] <Decision 1> (<date>, <confidence>)
 - [ ] <Decision 2> (<date>, <confidence>)
 
-### New Learnings Proposed (<N>)
-- [ ] Correction: "<correction text>" (<date>)
-- [ ] Preference: "<preference text>" (<date>)
-- [ ] Workflow: "<pattern text>" (<date>)
+### Learnings Saved (<N>)
+- Correction: "<correction text>" (<date>) → <path>
+- Preference: "<preference text>" (<date>) → <path>
+
+### Learning Candidates Dropped (<N>)
+- "<candidate text>" (<date>): <reason>
+
+### Auto Learnings Reviewed (<N>)
+- Confirmed: <path>
+- Patched: <path>: <what changed>
+- Retired: <path> → <archive path>: <reason>
+- Unverifiable: <path>: <what is missing>
 
 ### Contradictions (<N>)
 <contradiction table from Phase 3.2>
@@ -591,9 +619,8 @@ After all four phases, present the full report for approval:
 - Contradictions: <N>
 ```
 
-The user checks boxes for what to write. For each checked item:
+Learnings are already written (Phase 3.3) and auto learnings already reviewed (Phase 3.5); the user can delete, edit or restore any they disagree with. For the rest, the user checks boxes for what to write. For each checked item:
 - **Decisions** → append to `_decisions.md` by appending to the note
-- **Learnings** → write to appropriate `learnings/<category>/` subfolder by writing the note
 - **Contradictions** → user states which version to keep; update or remove the stale record
 - **Auto-memory items** → write to stated destination
 - **Stale sessions** → move to archive or delete (as user directs)

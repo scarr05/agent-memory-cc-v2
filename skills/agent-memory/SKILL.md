@@ -1,6 +1,6 @@
 ---
 name: agent-memory
-description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing a staging handoff, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires an Obsidian MCP server (the Local REST API plugin's built-in one, or MCP-Obsidian)."
+description: "Persistent memory system for AI agents using Obsidian as backing storage, with hook-enforced, project-scoped, three-tier storage. Use this skill when you need context about the user's preferences, want to recall previous work, need to log progress or decisions, when the user asks you to remember something, or when processing hook-injected staging files. Triggers on 'remember', 'what do you know about', 'continue where we left off', 'save this', 'log this decision', 'what did we decide', references to previous sessions, processing a staging handoff, or any memory operation. Also triggers when SessionStart hook injects pending items. Requires an Obsidian MCP server (MCPVault, or the Local REST API plugin's built-in one)."
 ---
 
 # Agent Memory v4
@@ -28,7 +28,7 @@ Persistent memory system stored in your Obsidian vault at `5 Agent Memory/`. Enf
 Hooks: SessionStart · PreToolUse · PreCompact · Stop · SessionEnd · UserPromptSubmit
 Subagents: memberberry (retrieval, memory: user) · blackbox (checkpoint, memory: project)
 Staging: ~/.claude/memory-staging/<slug>/
-Commands: /memory-init  /memory-load  /memory-sync  /decision
+Commands: /memory-init  /memory-load  /memory-sync  /handoff  /decision
 ```
 
 Data flows upward. Hooks enforce the lifecycle deterministically. The agent handles MCP operations that hooks can't.
@@ -62,9 +62,8 @@ Data flows upward. Hooks enforce the lifecycle deterministically. The agent hand
 1. **Hooks detect, subagents retrieve, MCP writes** — SessionStart injects the project slug and dynamic state via CLI. Delegate vault reads to memberberry (Haiku). Write to Obsidian via MCP.
 2. **Project slug drives routing** — all session paths use `sessions/by-project/<slug>/`. The slug comes from hook context or `.claude/CLAUDE.md` metadata.
 3. **Log meaningful sessions** — not every interaction, only significant ones.
-4. **Propose learnings** — never write to `learnings/` without the user's approval.
-5. **Process staging files** — if hooks created staging files, process them to Obsidian before they pile up.
-6. **Scratchpad is yours** — use `working/` freely for in-progress work.
+4. **Choose learnings carefully** — which learnings to save is your call; save only what passes the tests in §4, and tell the user what you saved.
+5. **Scratchpad is yours** — use `working/` freely for in-progress work.
 
 ---
 
@@ -74,11 +73,11 @@ Six hooks fire automatically. Know what they do so you can respond appropriately
 
 | Hook | Fires When | What It Does | Your Job |
 |------|-----------|--------------|----------|
-| **SessionStart** | Session begins (incl. `source=compact`) | Injects slug, a pending handoff, the unsynced-session flag, and init status via `additionalContext`. On `source=compact`, harvests the compaction summary into a handoff. | Process pending staging files. On a compaction restart, the handoff is injected automatically — review it and continue. Search Obsidian for prior context if the task is non-trivial. |
-| **PreToolUse** (Read) | Before a Read | Blocks redundant re-reads (read-once) via `permissionDecision`. | Nothing — it's transparent. |
+| **SessionStart** | Session begins (incl. `source=compact`) | Injects slug, init status, vault state, the unsynced-session flag and the 💤 dream-pending nudge (24-hour timer) via `additionalContext`; after `/clear`, an armed handoff instead. On `source=compact`, harvests the compaction summary into a handoff. | On a compaction restart, the handoff is injected automatically — review it and continue. Search Obsidian for prior context if the task is non-trivial. |
+| **PreToolUse** (Read) | Before a Read | Flags an unchanged re-read (read-once) via `permissionDecision`: an advisory by default, a block when `READ_ONCE_MODE=deny`. | Nothing — it's transparent. |
 | **PreCompact** | Before compaction | Clears the read-once cache; checkpoint stubs are retired. Injects nothing — the handoff happens at the next SessionStart. | Nothing at compaction time; the post-compaction SessionStart drives the handoff. |
-| **Stop** | Each response | Nudges via `systemMessage` if the session is long (15/30 messages, 45+ min); checks the 24-hour dream timer. | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
-| **SessionEnd** | Session ends | Writes `.unsynced` if a real-length session ended without `/memory-sync` (skips a deliberate `clear`). Side-effect only. | Nothing — the next SessionStart surfaces it. |
+| **Stop** | Each response | Nudges via `systemMessage` if the session is long (15/30 exchanges, 45+ min) or passes the handoff token threshold (`memory.handoffTokenThreshold`, default 150000). | Acknowledge the nudge. Suggest `/memory-sync` if the session has been significant. |
+| **SessionEnd** | Session ends | Writes `.unsynced` if a real-length session ended without `/memory-sync` (never for a deliberate `clear`, where it writes a fallback `handoff.md` if none is armed). Side-effect only. | Nothing — the next SessionStart surfaces it. |
 | **UserPromptSubmit** | Each prompt | If the prompt touches a logged correction's topic, injects a one-line pointer via `additionalContext`. | Load the correction via memberberry before acting on that topic. |
 
 ### Staging Directory
@@ -86,7 +85,7 @@ Six hooks fire automatically. Know what they do so you can respond appropriately
 Hooks write to `~/.claude/memory-staging/<slug>/` because they can't call MCP. You bridge this to Obsidian:
 
 1. **Handoff scratch** (`handoff.md`) — written by `/handoff` (or harvested by a hook). SessionStart injects it automatically and renames it `handoff.consumed.md`; `/memory-sync` deletes both. You normally don't process it by hand.
-2. **Session meta** (`.session-meta`) — tracks message count and timing. Read-only for you; managed by hooks.
+2. **Session meta** (`sessions/<session_id>/.session-meta`) — tracks message count and timing, one folder per session. Read-only for you; managed by hooks.
 
 ---
 
@@ -173,14 +172,17 @@ source_agent: "claude-code|claude.ai|codex"
 
 ---
 
-### 4. Propose Learning
+### 4. Save Learning
 
 **When:** You discover something about the user's preferences, workflows, or corrections.
 
-**Process:**
-1. Don't write directly — propose to the user first
-2. State what you learned and ask for confirmation
-3. Only write to `learnings/<category>/` after approval
+**Process:** which learnings to save is your call; don't ask the user to pick.
+1. Save it only if it is durable (holds beyond this task), would change what a future session does, is evidenced in this session (the user said it, corrected you, or the approach was tried and the result seen) and is not already recorded. When in doubt, drop it: a wrong learning misleads every session that loads it
+2. A `corrections/` learning needs an explicit correction from the user, or a handoff `## Do-Not-Redo` line
+3. Write it to `learnings/<category>/`: `confidence: high` when the user stated it, `medium` when you inferred it
+4. Tell the user what you saved and where, so they can delete or edit it
+
+`/memory-sync` Step 4 is the full version of these tests. An auto sync (`--auto`, or a project with `<!-- memory:auto=true -->`) saves the same way and adds `auto: true`, `project:` and `session:`, so `--dream` reviews it for accuracy.
 
 **Categories map to subfolders:**
 - `preferences/` — formatting, communication, style choices
@@ -195,7 +197,7 @@ title: "Learning - Topic"
 created: YYYY-MM-DD
 modified: YYYY-MM-DD
 type: learning
-category: [preference|workflow|context|correction]
+category: [preference|technical|workflow|correction]
 confidence: [high|medium|low]
 project: ""
 area: ""
@@ -252,9 +254,9 @@ When the user says "continue where we left off" or "resume X":
 
 ```
 1. Get project slug from hook context or .claude/CLAUDE.md
-2. search vault for "X" — filter results to sessions/by-project/<slug>/
-3. Find most recent relevant session with resumable: true
-4. Read full session note
+2. Delegate to memberberry: "find the most recent resumable session about X for <slug>"
+3. Take the most recent relevant session with resumable: true from its summary
+4. Read the full session note only if the summary is not enough
 5. Read any linked working/ files
 6. Check staging directory for a pending handoff
 7. Summarise: "Last session on [date], we [summary].
@@ -266,13 +268,14 @@ When the user says "continue where we left off" or "resume X":
 
 ## Slash Command Integration
 
-Four slash commands handle the structured workflows. This skill provides the underlying operations they rely on.
+Five slash commands handle the structured workflows. This skill provides the underlying operations they rely on.
 
 | Command | What It Does | When to Suggest |
 |---------|-------------|-----------------|
 | `/memory-init` | Auto-detects project, creates CLAUDE.md metadata, sets up Obsidian structure, loads context | First time in a new project, or SessionStart flags no config |
 | `/memory-load` | Searches Obsidian by slug, presents prior sessions and learnings | Session start for non-trivial work |
-| `/memory-sync` | Writes structured session note, proposes learnings, appends decisions, marks the session synced, cleans staging | End of significant session |
+| `/memory-sync` | Writes structured session note, chooses and saves learnings, appends decisions, marks the session synced, cleans staging | End of significant session |
+| `/handoff` | Captures the current work unit into `handoff.md` and arms it for the next session | Before `/clear`, or when the Stop hook nudges about tokens |
 | `/decision` | Logs a single decision to `_decisions.md` without a full sync | A decision worth recording mid-session |
 
 If the user runs these commands, follow their instructions. If the user doesn't and the session is significant, suggest `/memory-sync` before ending.
@@ -300,7 +303,7 @@ The architecture optimises tokens at every layer:
 - **SessionStart** — CLI snapshot, ~200-300 tokens once (vs MCP dump)
 - **memberberry** — Haiku retrieval, main model gets ~200 token summary
 - **blackbox** — Haiku checkpoint, no main model context cost
-- **read-once** — blocks redundant source code reads, ~2000 tokens saved per prevented re-read
+- **read-once** — flags redundant full-file re-reads (blocks them with `READ_ONCE_MODE=deny`, ~2000 tokens saved per prevented re-read)
 
 **Rules:**
 - Never call MCP vault search or note reads directly — delegate to memberberry
@@ -327,8 +330,6 @@ The architecture optimises tokens at every layer:
 
 ### Obsidian MCP (writes)
 
-| Tool | Use For |
-|------|---------|
 | Verb used in `commands/` | MCPVault (`@bitbonsai/mcpvault`) | Local REST API plugin (v5+) |
 |---|---|---|
 | read note | `read_note` | `vault_read` |
@@ -349,10 +350,10 @@ The architecture optimises tokens at every layer:
 ### Starting work on a project (with hooks)
 
 ```
-1. SessionStart hook injects: "Project: my-project, area: AWS.
-   Pending handoff from yesterday — loaded into context."
-2. Agent reviews the injected handoff and continues
-3. Agent searches: sessions/by-project/my-project/ and learnings/ for "project-name"
+1. SessionStart hook injects: "Project: my-project, area: AWS", git state,
+   open items and memory depth (a handoff is injected only after /clear)
+2. Agent reads the injected context
+3. Agent delegates to memberberry: prior sessions and learnings for "my-project"
 4. Finds recent session and preferences
 5. Agent: "Found prior project work. Last session: v5 pillar alignment.
    Open items: test coverage. Apply same approach?"
