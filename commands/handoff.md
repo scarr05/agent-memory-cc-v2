@@ -13,7 +13,7 @@ Capture where we are right now into a single-slot scratch file so a fresh sessio
 
 ## Auto mode
 
-`/handoff --auto`, and every `/handoff` in a Chief lead (`CHIEF_LEAD=1`), asks nothing and never stops to wait: Chief sends it and waits for the turn to end. Step 1 prints `AUTO=1` when it applies; the parse is `state-lib.sh args`, which refuses any flag it does not know. Under `AUTO=1`:
+`/handoff --auto`, and every `/handoff` in a project that opts into auto memory (`<!-- memory:auto=true -->` in its `.claude/CLAUDE.md`), asks nothing and never stops to wait: the agent runs it on its own, so there may be nobody to answer. Step 1 prints `AUTO=1` when it applies (`AUTO_WHY=flag` or `project`); the parse is `state-lib.sh args`, which refuses any flag it does not know. Under `AUTO=1`:
 
 | Where the interactive run stops or asks | What auto does instead |
 |---|---|
@@ -32,16 +32,15 @@ HOOKS="$HOME/.claude/hooks"
 [[ -n "${CLAUDE_PLUGIN_ROOT:-}" && -d "${CLAUDE_PLUGIN_ROOT}/hooks" ]] && HOOKS="${CLAUDE_PLUGIN_ROOT}/hooks"
 LIB="$HOOKS/handoff-lib.sh"
 
-# Mode: AUTO=1 for --auto or in a Chief lead. The arguments go in through a quoted
+# Mode: AUTO=1 for --auto or a memory:auto=true project. The arguments go in through a quoted
 # heredoc, so quotes in a note cannot break the shell; an unknown flag stops here.
 bash "$HOOKS/state-lib.sh" args handoff <<'HANDOFF_ARGS' || exit 2
 $ARGUMENTS
 HANDOFF_ARGS
 
 # Paths (state-lib.sh): the slug, as the hooks resolve it (a linked worktree lands
-# under its main checkout's slug); the slot this session hands off through (Sam's
-# is <slug>/, a lead's is <slug>/leads/<worktree>/, so neither overwrites the
-# other); and this session's own folder. Claude Code substitutes this session's id
+# under its main checkout's slug); the slot this session hands off through
+# (<slug>/); and this session's own folder. Claude Code substitutes this session's id
 # below, so the transcript is this session's even with others live in the repo.
 # A Claude Code that does not substitute leaves it empty: then the slot's newest
 # session stands in (SESSION_SOURCE=pointer) and AMBIGUOUS=1 flags a second
@@ -80,7 +79,7 @@ bash "$LIB" finalize --out "$HANDOFF" --consumed "$CONSUMED" &&
     bash "$HOOKS/state-lib.sh" mark handoff --session "${CLAUDE_SESSION_ID}"
 ```
 
-If the output starts with `ABORTED`, the narrative was left unfilled; go back to Step 3 and fill it, then re-run finalise. Do not tell the user it is armed until finalise prints `ARMED`. `MARKED: handoff` records `handoff_at` in this session's `.session-meta`, the marker `chief recycle` waits for.
+If the output starts with `ABORTED`, the narrative was left unfilled; go back to Step 3 and fill it, then re-run finalise. Do not tell the user it is armed until finalise prints `ARMED`. `MARKED: handoff` records `handoff_at` in this session's `.session-meta`.
 
 ## Step 5: Tell the user
 

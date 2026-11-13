@@ -26,9 +26,9 @@ IFS= read -r -d '' STDIN_JSON || true
 
 # --- Where this session's state lives (state-lib.sh, beside this hook) ---
 # SESSION_DIR is keyed by the hook input's session_id, so two sessions in one
-# project keep separate counts; SLOT_DIR holds what crosses /clear. Without the
-# library or a session id, both are the project folder, as before.
-SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+# project keep separate counts. Without the library or a session id, it is the
+# project folder, as before.
+SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SESSION_DIR="$PROJECT_DIR"
 # shellcheck source=/dev/null
 if [[ -f "$LIBDIR/state-lib.sh" ]]; then source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; fi
 

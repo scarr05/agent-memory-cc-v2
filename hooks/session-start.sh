@@ -26,7 +26,7 @@ fi
 # half-built payload — the full path and this script's compact/clear branch
 # (Task 4) both call it the same way, with their context fully assembled.
 emit_context_and_exit() {
-    local ctx="$1"
+    local ctx="$1${CONTEXT_FOOTER:-}"
     local out="${ctx//\\n/$'\n'}"          # expand only the \n we control; leave \t \r etc literal
     # No jq => degrade to the documented plaintext channel rather than dying
     # having injected nothing (this is the highest-value hook).
@@ -77,13 +77,18 @@ AREA=$(detect_area)
 AREA=$(printf '%s' "$AREA" | tr -dc 'A-Za-z0-9 _-' | head -c 64)
 
 # Where each kind of state lives (state-lib.sh): PROJECT_DIR for the project,
-# SLOT_DIR for what this line of work hands its next session (Sam's is
-# PROJECT_DIR itself, a lead's is leads/<worktree>), SESSION_DIR for this
-# session alone, keyed by the hook input's session_id. Without the library, or
-# without a session id, all three are the project folder, as before.
-SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"
+# SLOT_DIR for what a session hands its next one (the project folder itself),
+# SESSION_DIR for this session alone, keyed by the hook input's session_id.
+# Without the library, or without a session id, all three are the project
+# folder, as before. PROJECT_AUTO=1 when the project opts into auto memory.
+SESSION_ID=""; PROJECT_DIR="$STAGING_DIR/$SLUG"; SLOT_DIR="$PROJECT_DIR"; SESSION_DIR="$PROJECT_DIR"; PROJECT_AUTO=0
 # shellcheck source=/dev/null
-if [[ -f "$LIBDIR/state-lib.sh" ]]; then source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; fi
+if [[ -f "$LIBDIR/state-lib.sh" ]]; then
+    source "$LIBDIR/state-lib.sh"; state_session_id "$STDIN_JSON"; state_dirs; state_project_auto
+fi
+# Appended to every context, fast path or full, by emit_context_and_exit.
+CONTEXT_FOOTER=""
+[[ "$PROJECT_AUTO" == "1" ]] && CONTEXT_FOOTER="\\n→ **Auto memory is on** (\`memory:auto=true\`): you manage this project's memory. Run \`/memory-sync\` yourself when a unit of work is done, and \`/handoff\` when context runs short; both run without questions and save learnings directly.\\n"
 
 # Ensure staging directories exist
 mkdir -p "$SLOT_DIR" "$SESSION_DIR"
@@ -96,8 +101,7 @@ fi
 
 # Capture the prior session's meta BEFORE the full path resets it. PRIOR_COUNT
 # feeds both the dream timer and the "previous session" hint further down. The
-# prior session is the slot's last one (.last-session), so a lead starting in
-# between never stands in for Sam's previous session, or the other way round.
+# prior session is the project's last one (.last-session).
 PRIOR_SESSION_INFO=""
 PRIOR_META="$SLOT_DIR/.session-meta"
 if [[ -n "$SESSION_ID" ]]; then

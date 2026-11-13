@@ -1,7 +1,6 @@
 .claude/
 __pycache__/
 
-# Local tool output: cc-chief lead reports, graphify graphs, superpowers scratch
-.chief/
+# Local tool output: graphify graphs, superpowers scratch
 graphify-out/
 .superpowers/

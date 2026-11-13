@@ -182,7 +182,7 @@ source_agent: "claude-code|claude.ai|codex"
 3. Write it to `learnings/<category>/`: `confidence: high` when the user stated it, `medium` when you inferred it
 4. Tell the user what you saved and where, so they can delete or edit it
 
-`/memory-sync` Step 4 is the full version of these tests. A Chief lead or an `--auto` sync writes proposals to `sessions/by-project/<slug>/proposed-learnings/` instead.
+`/memory-sync` Step 4 is the full version of these tests. An auto sync (`--auto`, or a project with `<!-- memory:auto=true -->`) saves the same way and adds `auto: true`, `project:` and `session:`, so `--dream` reviews it for accuracy.
 
 **Categories map to subfolders:**
 - `preferences/` — formatting, communication, style choices

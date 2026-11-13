@@ -60,7 +60,7 @@ Configuration via environment variables — see `hooks/read-once/README.md`.
 │   ├── prompt-corrections.sh   # UserPromptSubmit — surface a logged correction in context
 │   ├── handoff-lib.sh          # Sourced library — handoff build/harvest functions
 │   ├── slug-lib.sh             # Sourced library — the one slug lookup
-│   ├── state-lib.sh            # Sourced library — session/lead state paths, command flags
+│   ├── state-lib.sh            # Sourced library — session state paths, command flags, auto marker
 │   └── read-once/
 │       ├── hook.sh             # PreToolUse hook — block/warn on redundant file reads
 │       └── README.md           # Configuration and integration docs

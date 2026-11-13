@@ -90,7 +90,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - `hooks/hooks.json` — Plugin hook registration (mirrors `config/settings.json` with `${CLAUDE_PLUGIN_ROOT}` paths)
 - `hooks/handoff-lib.sh` — Shared bash library holding handoff read/write functions; sourced by hooks, not registered as a hook event
 - `hooks/slug-lib.sh` — The one slug lookup, sourced by every hook and run by the commands; maps a linked worktree or subfolder to the main checkout's slug
-- `hooks/state-lib.sh` — Where session state lives: `<slug>/sessions/<session_id>/` per session, and a Chief lead's (`CHIEF_LEAD=1`) handoff slot `<slug>/leads/<worktree>/`; also parses the `/memory-sync` and `/handoff` flags (`--auto`). See `docs/hooks-architecture.md` § Session state
+- `hooks/state-lib.sh` — Where session state lives: `<slug>/sessions/<session_id>/` per session, the handoff slot `<slug>/`; parses the `/memory-sync` and `/handoff` flags (`--auto`) and reads the per-project `memory:auto=true` marker. See `docs/hooks-architecture.md` § Session state
 - `config/global-claude-md-v2.md` — Global CLAUDE.md with preferences, memory rules, MCP tool list, and vault structure
 - `commands/handoff.md` — `/handoff` command: captures the current work unit into a handoff scratch file before `/clear`
 - `docs/hooks-architecture.md` — System design document explaining the hook-MCP bridge pattern, detection logic, and interaction flows
@@ -102,7 +102,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 - All bash scripts use `set -euo pipefail`
 - **Hooks must run on bash 3.2 + BSD userland (macOS) and bash 4+/GNU (Git Bash, WSL).** No `${var,,}`, `declare -A`, or `mapfile`; no `sed -i EXPR FILE`, `grep -oP`, or bare `sha1sum`. Portable idioms already in the repo: `tr '[:upper:]' '[:lower:]' | sed` for case folding, `sed` to a temp + `mv` for in-place edits, `sha1sum || shasum -a 1`. Note `bash -n` does **not** catch a bash-4 expansion — it is a runtime error, so always execute the hook, not just parse it. One codebase for both platforms: gate bash-4 builtins on `BASH_VERSINFO[0] -ge 4` with a bash-3.2 fallback branch rather than forking a per-OS copy. Any hook change must pass `tests/hook-validation.sh` on both a Windows Git Bash and a macOS machine before merge
 - Slug detection lives in `hooks/slug-lib.sh` only. Hooks source it from beside themselves and fall back to the slug `unknown` if it is missing, so a partial install degrades rather than guesses
-- `--auto` (always on when `CHIEF_LEAD=1`) means the command asks nothing. Learnings from an auto sync go to `sessions/by-project/<slug>/proposed-learnings/`, never `learnings/`. In an attended sync the agent chooses which learnings to save and writes them to `learnings/` without asking
+- `--auto` means the command asks nothing. A project turns it on for every `/memory-sync` and `/handoff` with `<!-- memory:auto=true -->` in its `.claude/CLAUDE.md`: the agent then manages that project's memory itself (SessionStart tells it so). Every sync, auto or attended, chooses its own learnings and writes them to `learnings/` without asking; an auto sync marks them `auto: true`, and `--dream` reviews those for accuracy (Phase 3.5): confirm, patch, or retire to `archive/learnings/`
 - Memory metadata in project CLAUDE.md files uses HTML comments (`<!-- memory:key=value -->`) for invisibility in rendered markdown
 - Obsidian notes must always include YAML frontmatter
 - British English spelling throughout (organisation, colour, behaviour)
@@ -111,7 +111,7 @@ cd ~/your-project && echo '{}' | bash ~/.claude/hooks/session-start.sh
 
 Semi-automated test suite in `tests/`:
 - **Tier 1 (scripted):** `HOOKS_DIR=./hooks bash tests/hook-validation.sh /path/to/project [expected-slug]` — validates hook outputs and captures metrics. `HOOKS_DIR` defaults to `~/.claude/hooks`, so without it you test the installed copy, not the repo code
-- **Harness (scripted):** `uv run --no-project --with pytest pytest tests/test_memory_hooks.py -q` — runs the hooks and the commands' bash blocks against a temp `HOME` (never `~/.claude` or the vault). About seven minutes on Windows. Ported from cc-chief #99
+- **Harness (scripted):** `uv run --no-project --with pytest pytest tests/test_memory_hooks.py -q` — runs the hooks and the commands' bash blocks against a temp `HOME` (never `~/.claude` or the vault). About seven minutes on Windows
 - **Handoff library:** `bash tests/handoff-lib-test.sh`
 - **Tier 2-3 (manual):** Follow `tests/playbook.md` for session-level testing
 - **Results:** `tests/results/baseline-YYYY-MM-DD.md` (gitignored)

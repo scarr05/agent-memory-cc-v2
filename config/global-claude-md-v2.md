@@ -106,9 +106,8 @@ Commands describe vault operations as verbs; map them to whichever server is reg
     handoff.md                         # Current-work-unit scratch (written by /handoff)
     handoff.consumed.md                # Renamed by SessionStart after injection
     .unsynced                          # Written by SessionEnd, removed by /memory-sync
-    .last-session                      # Newest session id for this slot
+    .last-session                      # Newest session id
     sessions/<session_id>/.session-meta  # Message count, timestamps (one folder per session)
-    leads/<worktree>/                  # A CHIEF_LEAD=1 session's own slot
 
 5 Agent Memory/sessions/by-project/<slug>/  # Obsidian (permanent)
 5 Agent Memory/learnings/                   # Cross-project knowledge
@@ -138,6 +137,6 @@ Commands describe vault operations as verbs; map them to whichever server is reg
 
 1. When writing to Obsidian, ALWAYS include proper YAML frontmatter
 2. When writing code that uses libraries, ALWAYS use Context7 first
-3. Which learnings go into `learnings/` is your call: save only what is durable, would change a future session's behaviour and is evidenced in the session (`/memory-sync` Step 4 has the tests), then tell me what you saved
+3. Which learnings go into `learnings/` is your call: save only what is durable, would change a future session's behaviour and is evidenced in the session (`/memory-sync` Step 4 has the tests), then tell me what you saved. A project with `<!-- memory:auto=true -->` in its `.claude/CLAUDE.md` is yours to manage: run `/memory-sync` yourself when a unit of work is done; it asks nothing and marks its learnings `auto: true` for `--dream` to review
 4. Use `working/` freely, but clean up when done
 5. If the Obsidian MCP server isn't responding, tell me — don't silently skip memory operations. MCPVault works with Obsidian closed; the Obsidian CLI and the Local REST API plugin both need the app open.

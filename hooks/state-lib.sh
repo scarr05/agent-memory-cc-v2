@@ -1,28 +1,26 @@
 #!/usr/bin/env bash
 # state-lib.sh: where the memory hooks keep each kind of state, so that two
-# sessions in one project, a Chief lead's and Sam's, never write the same file.
-# Sourced by the hooks after slug-lib.sh (it needs SLUG); run as a script by
-# the /memory-sync and /handoff commands.
+# sessions in one project never write the same session file. Sourced by the
+# hooks after slug-lib.sh (it needs SLUG); run as a script by the /memory-sync
+# and /handoff commands.
 #
 #   $STAGING_DIR/<slug>/                    the project: .corrections-index,
 #                                           .vault-cache-*, .last-dream, .dream-pending
 #   $STAGING_DIR/<slug>/sessions/<id>/      one session: .session-meta, .transcript-path
-#   the slot                                what one line of work hands its next
-#     Sam: $STAGING_DIR/<slug>/             session across /clear: handoff.md,
-#     a lead (CHIEF_LEAD=1):                handoff.consumed.md, .unsynced, and
-#       $STAGING_DIR/<slug>/leads/<worktree>/  .last-session (the newest session id)
-#
-# Sam's slot is the project folder itself, so relay-baton, /wrap and memory-load
-# keep reading <slug>/handoff.md and <slug>/next-prompt.md as before. A lead gets
-# a slot per worktree, named as git names the worktree.
+#   SLOT_DIR, the same folder as the project, holds what crosses /clear:
+#     handoff.md, handoff.consumed.md, .unsynced, .last-session (newest session
+#     id). relay-baton, /wrap and memory-load read <slug>/handoff.md there.
 #
 # The session id is the hook input's `session_id`. Without one (an older Claude
 # Code, a hand run) the session's files stay in the slot: the old layout.
-# Session ids and worktree names are clamped to [A-Za-z0-9_-]; they become paths.
+# Session ids are clamped to [A-Za-z0-9_-]; they become paths.
 #
 #   bash state-lib.sh paths [--session ID]           KEY=value lines for a command
 #   bash state-lib.sh args memory-sync|handoff       arguments on stdin; MODE, AUTO, NOTE
 #   bash state-lib.sh mark synced|handoff [--session ID]
+#
+# Auto memory: a project whose .claude/CLAUDE.md carries `<!-- memory:auto=true -->`
+# runs /memory-sync and /handoff as if --auto were given (AUTO_WHY=project).
 
 _STATE_SID_RE='"session_id"[[:space:]]*:[[:space:]]*"([^"]*)"'
 
@@ -33,39 +31,22 @@ state_session_id() {
     return 0
 }
 
-# Sets _found to this worktree's name: git's name for a linked worktree (the
-# last part of `.git/worktrees/<name>`), else the checkout's folder name.
-_state_worktree() {
-    local line="" top=""
-    _found=""
-    if [[ -f .git ]]; then
-        IFS= read -r line <.git || true
-        line="${line#gitdir: }"; line="${line%/}"
-        [[ "$line" == */worktrees/* ]] && _found="${line##*/}"
-    fi
-    if [[ -z "$_found" && ! -d .git ]] && command -v git &>/dev/null; then
-        # One fork for both: line 1 the git dir, line 2 the toplevel. A bare repo
-        # prints line 1 only, so top stays empty and falls back to $PWD below.
-        line=$(git rev-parse --absolute-git-dir --show-toplevel 2>/dev/null || true)
-        [[ "$line" == *$'\n'* ]] && top="${line#*$'\n'}"
-        line="${line%%$'\n'*}"; line="${line%/}"
-        [[ "$line" == */worktrees/* ]] && _found="${line##*/}"
-    fi
-    [[ -z "$_found" ]] && { top="${top:-$PWD}"; top="${top%/}"; _found="${top##*/}"; }
-    _found="${_found//[^A-Za-z0-9_-]/}"
-    [[ -n "$_found" ]] || _found="unknown"
+# Sets PROJECT_AUTO=1 when the project opts into auto memory with a
+# `<!-- memory:auto=true -->` marker (slug_marker: this checkout's
+# .claude/CLAUDE.md, else the main checkout's), else 0. Needs slug-lib.sh,
+# sourced first; without it, 0.
+state_project_auto() {
+    local _found=""
+    PROJECT_AUTO=0
+    declare -F slug_marker >/dev/null && slug_marker 'memory:auto=([a-z]+)' &&
+        [[ "$_found" == "true" ]] && PROJECT_AUTO=1
+    return 0
 }
 
-# Sets PROJECT_DIR, SLOT_DIR and SESSION_DIR from SLUG, SESSION_ID and CHIEF_LEAD.
-# Forks only for a lead outside its worktree's root.
+# Sets PROJECT_DIR, SLOT_DIR and SESSION_DIR from SLUG and SESSION_ID. No fork.
 state_dirs() {
-    local _found=""
     PROJECT_DIR="${STAGING_DIR:-$HOME/.claude/memory-staging}/$SLUG"
     SLOT_DIR="$PROJECT_DIR"
-    if [[ "${CHIEF_LEAD:-}" == "1" ]]; then
-        _state_worktree
-        SLOT_DIR="$PROJECT_DIR/leads/$_found"
-    fi
     if [[ -n "${SESSION_ID:-}" ]]; then
         SESSION_DIR="$PROJECT_DIR/sessions/$SESSION_ID"
     else
@@ -96,6 +77,14 @@ state_set() {
 
 _state_die() { echo "state-lib.sh: $*" >&2; exit 2; }
 
+# Source slug-lib.sh from beside this file; false when it is missing.
+_state_source_slug_lib() {
+    local LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
+    [[ -f "$LIBDIR/slug-lib.sh" ]] || return 1
+    # shellcheck source=/dev/null
+    source "$LIBDIR/slug-lib.sh"
+}
+
 # Resolve SLUG, the dirs and the session: the id from `--session ID`, else the
 # slot's newest session. $1 names the subcommand for errors; the rest are its
 # arguments, of which only --session is known. Sets SESSION_SOURCE, TRANSCRIPT
@@ -109,13 +98,7 @@ _state_resolve() {
         --session) given="${2:-}"; shift 2 || shift;;
         *) _state_die "$sub: unknown argument '$1'";;
     esac; done
-    local LIBDIR="${BASH_SOURCE[0]%/*}"; [[ "$LIBDIR" == "${BASH_SOURCE[0]}" ]] && LIBDIR=.
-    if [[ -f "$LIBDIR/slug-lib.sh" ]]; then
-        # shellcheck source=/dev/null
-        source "$LIBDIR/slug-lib.sh"; resolve_slug
-    else
-        SLUG="unknown"
-    fi
+    if _state_source_slug_lib; then resolve_slug; else SLUG="unknown"; fi
     SESSION_ID="${given//[^A-Za-z0-9_-]/}"
     SESSION_SOURCE="given"
     state_dirs
@@ -155,7 +138,7 @@ _state_cli_paths() {
 #   memory-sync: at most one of --dream --ingest --tidy --status, plus --auto.
 #                Words that are not flags are refused too: the command takes none.
 #   handoff:     --auto, then free text kept as NOTE.
-# AUTO=1 also when CHIEF_LEAD=1: a lead never has anyone to answer a question.
+# AUTO=1 also when the project opts in with `memory:auto=true` (AUTO_WHY=project).
 _state_cli_args() {
     local cmd="${1:-}" text="" word mode="" auto=0 why="" note=""
     [[ "$cmd" == "memory-sync" || "$cmd" == "handoff" ]] || _state_die "args: memory-sync or handoff"
@@ -179,7 +162,10 @@ _state_cli_args() {
     done
     set +f
     if [[ "$cmd" == "handoff" ]]; then mode="handoff"; else mode="${mode:-standard}"; fi
-    [[ "$auto" == 0 && "${CHIEF_LEAD:-}" == "1" ]] && { auto=1; why="lead"; }
+    if [[ "$auto" == 0 ]] && _state_source_slug_lib; then
+        state_project_auto
+        [[ "$PROJECT_AUTO" == 1 ]] && { auto=1; why="project"; }
+    fi
     printf '%s=%s\n' COMMAND "$cmd" MODE "$mode" AUTO "$auto"
     [[ -n "$why" ]] && printf 'AUTO_WHY=%s\n' "$why"
     [[ "$cmd" == "handoff" ]] && printf 'NOTE=%s\n' "$note"
@@ -189,7 +175,6 @@ _state_cli_args() {
 # synced:  this session's meta gets synced=true, synced_at=<epoch> and
 #          message_count=0, and the slot's .unsynced goes.
 # handoff: this session's meta gets handoff_at=<epoch>.
-# Chief compares these times with a ticket's start and a lead's last turn.
 _state_cli_mark() {
     local what="${1:-}" meta now
     shift || true
